@@ -25,7 +25,7 @@ O jogador é colocado dentro de uma sala 3D e deve clicar nos alvos humanoides q
 ## Estrutura do Projeto
 
 ```
-aimlab/
+trabalho-2-cg/
 ├── index.html       # Jogo completo (shaders GLSL inline, lógica principal)
 ├── obj-loader.js    # Leitor próprio de arquivos OBJ
 ├── geometries.js    # Geometrias procedurais (esfera UV, cubo, quad)
