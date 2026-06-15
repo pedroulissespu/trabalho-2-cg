@@ -1,0 +1,883 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+<meta charset="UTF-8">
+<title>AimLab CG</title>
+<script src="math.js"></script>
+<script src="obj-loader.js"></script>
+<script src="geometries.js"></script>
+
+<!-- ======================================================
+     VERTEX SHADER  — Phong per-fragment
+     ====================================================== -->
+<script id="vertex-shader" type="notjs">
+attribute vec4 position;
+attribute vec2 texCoord;
+attribute vec3 normal;
+
+uniform mat4 uModelViewProj;
+uniform mat4 uModel;
+uniform vec3 uLightPos;
+uniform vec3 uCamPos;
+
+varying vec2 vTexCoord;
+varying vec3 vNormal;
+varying vec3 vPointToLight;
+varying vec3 vPointToCam;
+
+void main() {
+    vec4 worldPos   = uModel * position;
+    vPointToLight   = uLightPos - worldPos.xyz;
+    vPointToCam     = uCamPos   - worldPos.xyz;
+    vNormal         = normalize((uModel * vec4(normal, 0.0)).xyz);
+    vTexCoord       = texCoord;
+    gl_Position     = uModelViewProj * position;
+}
+</script>
+
+<!-- ======================================================
+     FRAGMENT SHADER  — Phong + textura OU cor sólida
+     ====================================================== -->
+<script id="frag-shader" type="notjs">
+precision mediump float;
+
+uniform sampler2D uTex;
+uniform int       uUseTex;
+uniform vec3      uSolidColor;
+uniform vec3      uLightColor;
+uniform float     uAmbient;   // componente ambiente ajustável por objeto
+
+varying vec2 vTexCoord;
+varying vec3 vNormal;
+varying vec3 vPointToLight;
+varying vec3 vPointToCam;
+
+void main() {
+    vec3 N = normalize(vNormal);
+    vec3 L = normalize(vPointToLight);
+    vec3 V = normalize(vPointToCam);
+    vec3 H = normalize(L + V);
+
+    float diff = max(dot(N, L), 0.0);
+    float spec = pow(max(dot(N, H), 0.0), 56.0);
+
+    vec3 base;
+    if (uUseTex == 1) {
+        base = texture2D(uTex, vTexCoord).rgb;
+    } else {
+        base = uSolidColor;
+    }
+
+    vec3 col = uLightColor * (uAmbient * base
+                            + diff * base * 0.65
+                            + spec * vec3(1.0) * 0.40);
+    gl_FragColor = vec4(col, 1.0);
+}
+</script>
+
+<!-- HUD shaders -->
+<script id="hud-vert" type="notjs">
+attribute vec2 aPos; attribute vec2 aUV; varying vec2 vUV;
+void main() { vUV = aUV; gl_Position = vec4(aPos, 0.0, 1.0); }
+</script>
+<script id="hud-frag" type="notjs">
+precision mediump float;
+uniform sampler2D uHudTex; varying vec2 vUV;
+void main() {
+    vec4 c = texture2D(uHudTex, vUV);
+    if (c.a < 0.1) discard;
+    gl_FragColor = c;
+}
+</script>
+
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:#0a0a0f; display:flex; align-items:center; justify-content:center; height:100vh; font-family:'Courier New',monospace; color:#eee; }
+#ui { position:absolute; top:14px; left:50%; transform:translateX(-50%); display:flex; gap:36px; font-size:21px; text-shadow:0 0 8px #0ff; pointer-events:none; }
+#ui span { background:rgba(0,0,0,0.6); padding:4px 16px; border-radius:6px; border:1px solid rgba(0,255,255,0.2); }
+#overlay { position:absolute; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.88);
+           display:flex; flex-direction:column; align-items:center; justify-content:center; gap:18px; }
+#overlay h1 { font-size:46px; color:#0ff; text-shadow:0 0 24px #0ff; }
+#overlay p  { font-size:15px; color:#aaa; max-width:460px; text-align:center; line-height:1.6; }
+#overlay button { font-size:20px; padding:12px 44px; background:#0ff; color:#000; border:none; border-radius:8px; cursor:pointer; font-weight:bold; letter-spacing:1px; }
+#overlay button:hover { background:#0cc; }
+#loading { font-size:14px; color:#555; }
+#glcanvas1 { display:block; cursor:none; }
+</style>
+</head>
+<body>
+
+<div id="ui">
+  <span>Pontos: <b id="score">0</b></span>
+  <span>Tempo: <b id="timer">30</b>s</span>
+  <span>Tiros: <b id="shots">0</b></span>
+  <span>Acertos: <b id="hits">0</b></span>
+</div>
+
+<canvas id="glcanvas1" width="960" height="620"></canvas>
+
+<div id="overlay">
+  <h1>AimLab</h1>
+  <p>Mouse para mirar &nbsp;·&nbsp; <b>WASD</b> para mover<br>
+     Clique para atirar nos alvos — você tem <b>30 segundos</b>!<br>
+     Alvos distantes valem mais pontos.</p>
+  <button id="btnStart">Jogar</button>
+  <p id="loading" style="font-size:12px;color:#444">Carregando assets...</p>
+</div>
+
+<script>
+// ============================================================
+//  CONSTANTES DA CENA
+// ============================================================
+var ROOM_HALF   = 20;
+var ROOM_HEIGHT = 10;
+var WALK_BOUND  = 18;
+var MAX_TARGETS = 8;
+var LIGHT_RADIUS = 10;
+var LIGHT_Y      =  7;
+
+// ============================================================
+//  ESTADO GLOBAL
+// ============================================================
+var gl, prog3D, progHUD;
+var geoSphere, geoFloor, geoCeiling, geoUnitBox;
+var hudBuf;
+
+// Texturas carregadas
+var TEX = {};
+/*  Chaves: floor, wall, ceiling, scifi, gunmap,
+            skinF, skinM, skinZA, skinZC, crosshair  */
+
+// Modelos OBJ
+var objGun = null;
+
+var score=0, shots=0, hits=0, timeLeft=30;
+var gameRunning=false, timerInterval=null;
+
+// Câmera FPS
+var camPos=[0, 1.8, 14];
+var camYaw=0, camPitch=0;
+var keys={}, mouseDX=0, mouseDY=0, pointerLocked=false;
+
+// Luz animada
+var lightAngle=0;
+
+// Alvos
+var targets=[];
+
+// Efeito de tiro
+var shootFlash = 0;       // frame counter do flash branco na tela
+var bullets   = [];       // traçadores: {x,y,z, dx,dy,dz, life}
+
+// ============================================================
+//  VARIANTES DE PERSONAGEM
+//  head   → cor sólida da cabeça (tom de pele)
+//  shirt  → cor sólida do tronco/braços
+//  pants  → cor sólida das pernas
+// ============================================================
+var CHAR_VARIANTS = [
+    { head:[0.85,0.65,0.50], shirt:[0.25, 0.40, 0.72], pants:[0.12, 0.10, 0.09] },  // Survivor Female (azul)
+    { head:[0.78,0.55,0.40], shirt:[0.30, 0.50, 0.22], pants:[0.18, 0.14, 0.09] },  // Survivor Male   (verde militar)
+    { head:[0.55,0.58,0.38], shirt:[0.22, 0.20, 0.17], pants:[0.15, 0.12, 0.10] },  // Zombie A        (esverdeado)
+    { head:[0.60,0.58,0.55], shirt:[0.18, 0.18, 0.20], pants:[0.10, 0.10, 0.12] }   // Zombie C        (acinzentado)
+];
+
+// ============================================================
+//  HELPERS WEBGL  (padrão do professor)
+// ============================================================
+function getGL(canvas) {
+    var g = canvas.getContext("webgl") || canvas.getContext("experimental-webgl");
+    if (g) return g;
+    alert("Contexto WebGL inexistente! Troque de navegador!");
+    return null;
+}
+function createShader(g, type, src) {
+    var sh = g.createShader(type);
+    g.shaderSource(sh, src); g.compileShader(sh);
+    if (g.getShaderParameter(sh, g.COMPILE_STATUS)) return sh;
+    alert("Erro de compilação: " + g.getShaderInfoLog(sh));
+    g.deleteShader(sh); return null;
+}
+function createProgram(g, vsSrc, fsSrc) {
+    var vs=createShader(g,g.VERTEX_SHADER,vsSrc),
+        fs=createShader(g,g.FRAGMENT_SHADER,fsSrc),
+        p =g.createProgram();
+    g.attachShader(p,vs); g.attachShader(p,fs); g.linkProgram(p);
+    if (g.getProgramParameter(p, g.LINK_STATUS)) return p;
+    alert("Erro de linkagem: "+g.getProgramInfoLog(p));
+    g.deleteProgram(p); return null;
+}
+
+// ============================================================
+//  MATEMÁTICA  (padrão do professor)
+// ============================================================
+function createPerspective(fovyDeg, aspect, near, far) {
+    var fovy=fovyDeg*Math.PI/180;
+    var fy=1/math.tan(fovy/2), fx=fy/aspect;
+    var A=-(far+near)/(far-near), B=-2*far*near/(far-near);
+    return math.matrix([[fx,0,0,0],[0,fy,0,0],[0,0,A,B],[0,0,-1,0]]);
+}
+function createCamera(pos, target, up) {
+    var zc=math.divide(math.subtract(pos,target), math.norm(math.subtract(pos,target)));
+    var yt=math.divide(math.subtract(up,pos),    math.norm(math.subtract(up,pos)));
+    var xc=math.divide(math.cross(yt,zc),        math.norm(math.cross(yt,zc)));
+    var yc=math.divide(math.cross(zc,xc),        math.norm(math.cross(zc,xc)));
+    var mt=math.resize(math.inv(math.transpose(math.matrix([xc,yc,zc]))),[4,4],0);
+    mt._data[3][3]=1;
+    return math.multiply(mt, math.matrix([[1,0,0,-pos[0]],[0,1,0,-pos[1]],[0,0,1,-pos[2]],[0,0,0,1]]));
+}
+function mat4T(tx,ty,tz){ return math.matrix([[1,0,0,tx],[0,1,0,ty],[0,0,1,tz],[0,0,0,1]]); }
+function mat4S(sx,sy,sz){ return math.matrix([[sx,0,0,0],[0,sy,0,0],[0,0,sz,0],[0,0,0,1]]); }
+function mat4RY(a){ var c=Math.cos(a),s=Math.sin(a);
+    return math.matrix([[c,0,s,0],[0,1,0,0],[-s,0,c,0],[0,0,0,1]]); }
+function mat4RX(a){ var c=Math.cos(a),s=Math.sin(a);
+    return math.matrix([[1,0,0,0],[0,c,-s,0],[0,s,c,0],[0,0,0,1]]); }
+function toGL(m){ return math.flatten(math.transpose(m))._data; }
+
+// ============================================================
+//  TEXTURAS
+// ============================================================
+function uploadTexture(src) {
+    var tex=gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D,tex);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.REPEAT);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.REPEAT);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+    gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,src);
+    return tex;
+}
+
+function makeChecker(c1,c2,n) {
+    var cv=document.createElement('canvas'); cv.width=cv.height=64;
+    var ctx=cv.getContext('2d'), sz=64/n;
+    for(var i=0;i<n;i++) for(var j=0;j<n;j++){
+        ctx.fillStyle=(i+j)%2===0?c1:c2;
+        ctx.fillRect(i*sz,j*sz,sz,sz);
+    }
+    return cv;
+}
+function makeSolid(hex) {
+    var cv=document.createElement('canvas'); cv.width=cv.height=4;
+    var ctx=cv.getContext('2d');
+    ctx.fillStyle=hex; ctx.fillRect(0,0,4,4);
+    return cv;
+}
+function makeCrosshair() {
+    var cv=document.createElement('canvas'); cv.width=cv.height=64;
+    var ctx=cv.getContext('2d');
+    ctx.clearRect(0,0,64,64);
+    ctx.strokeStyle='rgba(255,255,255,0.92)'; ctx.lineWidth=2;
+    [[32,16,32,26],[32,38,32,48],[16,32,26,32],[38,32,48,32]].forEach(function(l){
+        ctx.beginPath(); ctx.moveTo(l[0],l[1]); ctx.lineTo(l[2],l[3]); ctx.stroke();
+    });
+    ctx.beginPath(); ctx.arc(32,32,5,0,Math.PI*2); ctx.stroke();
+    return cv;
+}
+
+// Carrega textura de arquivo; se falhar usa fallback Canvas
+function loadTexOrFallback(key, url, fallbackFn) {
+    var img=new Image();
+    img.onload  = function(){ TEX[key]=uploadTexture(img); };
+    img.onerror = function(){ TEX[key]=uploadTexture(fallbackFn()); };
+    img.src=url;
+}
+
+// ============================================================
+//  BUFFERS GPU
+// ============================================================
+function mkBufs(mesh) {
+    function buf(data){ var b=gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER,b);
+        gl.bufferData(gl.ARRAY_BUFFER,data,gl.STATIC_DRAW); return b; }
+    return { pos:buf(mesh.positions), tex:buf(mesh.texcoords),
+             nor:buf(mesh.normals),   count:mesh.vertexCount };
+}
+function bindBufs(buf) {
+    function attr(name,b,n){ var p=gl.getAttribLocation(prog3D,name);
+        gl.bindBuffer(gl.ARRAY_BUFFER,b); gl.enableVertexAttribArray(p);
+        gl.vertexAttribPointer(p,n,gl.FLOAT,false,0,0); }
+    attr("position",buf.pos,3); attr("texCoord",buf.tex,2); attr("normal",buf.nor,3);
+}
+
+// ============================================================
+//  DRAW MESH
+// ============================================================
+function drawMesh(buf, model, tex, useTex, solidColor, lp, cp, vp, ambient) {
+    gl.useProgram(prog3D);
+    bindBufs(buf);
+    var mvp=math.multiply(vp,model);
+    gl.uniformMatrix4fv(gl.getUniformLocation(prog3D,"uModelViewProj"),false,toGL(mvp));
+    gl.uniformMatrix4fv(gl.getUniformLocation(prog3D,"uModel"),        false,toGL(model));
+    gl.uniform3fv(gl.getUniformLocation(prog3D,"uLightPos"),  lp);
+    gl.uniform3fv(gl.getUniformLocation(prog3D,"uCamPos"),    cp);
+    gl.uniform3fv(gl.getUniformLocation(prog3D,"uLightColor"),[1.0,0.95,0.85]);
+    gl.uniform1f (gl.getUniformLocation(prog3D,"uAmbient"),   ambient!=null?ambient:0.20);
+    gl.uniform1i (gl.getUniformLocation(prog3D,"uUseTex"),    useTex?1:0);
+    if (useTex) {
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D,tex);
+        gl.uniform1i(gl.getUniformLocation(prog3D,"uTex"),0);
+    } else {
+        gl.uniform3fv(gl.getUniformLocation(prog3D,"uSolidColor"),solidColor);
+    }
+    gl.drawArrays(gl.TRIANGLES,0,buf.count);
+}
+
+// ============================================================
+//  FIGURA HUMANA  (6 peças, animação de caminhada)
+//  Cada alvo tem um variantIdx → CHAR_VARIANTS
+// ============================================================
+function drawHuman(t, lp, cp, vp) {
+    var v  = CHAR_VARIANTS[t.variantIdx];
+    var wc = t.walkCycle;
+    var s  = t.scaleAnim;
+    var legSwing =  Math.sin(wc)*0.52;
+    var armSwing = -Math.sin(wc)*0.38;
+
+    var base = math.multiply(
+        mat4T(t.x, 0, t.z),
+        math.multiply(mat4RY(t.faceAngle), mat4S(s,s,s))
+    );
+
+    // Cabeça — cor sólida de pele (as skin PNGs do Kenney são sheets completos,
+    //          não mapeiam bem em esfera; cor sólida fica mais limpa)
+    var headM = math.multiply(base,
+        math.multiply(mat4T(0,1.42,0), mat4S(0.22,0.22,0.22)));
+    drawMesh(geoSphere, headM, null, false, v.head, lp,cp,vp, 0.30);
+
+    // Tronco
+    var torsoM = math.multiply(base,
+        math.multiply(mat4T(0,0.82,0), mat4S(0.38,0.56,0.20)));
+    drawMesh(geoUnitBox, torsoM, null, false, v.shirt, lp,cp,vp);
+
+    // Braço esquerdo
+    var armH=0.44;
+    var lArmM = math.multiply(base,
+        math.multiply(mat4T(-0.25,1.05,0),
+        math.multiply(mat4RX(armSwing),
+        math.multiply(mat4T(0,-armH/2,0), mat4S(0.11,armH,0.11)))));
+    drawMesh(geoUnitBox, lArmM, null, false, v.shirt, lp,cp,vp);
+
+    // Braço direito
+    var rArmM = math.multiply(base,
+        math.multiply(mat4T(0.25,1.05,0),
+        math.multiply(mat4RX(-armSwing),
+        math.multiply(mat4T(0,-armH/2,0), mat4S(0.11,armH,0.11)))));
+    drawMesh(geoUnitBox, rArmM, null, false, v.shirt, lp,cp,vp);
+
+    // Perna esquerda
+    var legH=0.56;
+    var lLegM = math.multiply(base,
+        math.multiply(mat4T(-0.09,0.56,0),
+        math.multiply(mat4RX(legSwing),
+        math.multiply(mat4T(0,-legH/2,0), mat4S(0.14,legH,0.14)))));
+    drawMesh(geoUnitBox, lLegM, null, false, v.pants, lp,cp,vp);
+
+    // Perna direita
+    var rLegM = math.multiply(base,
+        math.multiply(mat4T(0.09,0.56,0),
+        math.multiply(mat4RX(-legSwing),
+        math.multiply(mat4T(0,-legH/2,0), mat4S(0.14,legH,0.14)))));
+    drawMesh(geoUnitBox, rLegM, null, false, v.pants, lp,cp,vp);
+}
+
+// ============================================================
+//  SPAWN / UPDATE
+// ============================================================
+function spawnTarget() {
+    var angle = Math.random()*Math.PI*2;
+    var dist  = 5 + Math.random()*12;
+    targets.push({
+        x: Math.cos(angle)*dist,
+        z: Math.sin(angle)*dist,
+        faceAngle: Math.random()*Math.PI*2,
+        walkCycle: Math.random()*Math.PI*2,
+        walkSpeed: 0.012 + Math.random()*0.014,
+        alive:     true,
+        scaleAnim: 0,
+        turnTimer: 100+Math.floor(Math.random()*200),
+        variantIdx: Math.floor(Math.random()*4)
+    });
+}
+function refillTargets() {
+    var alive=0;
+    for(var i=0;i<targets.length;i++) if(targets[i].alive) alive++;
+    while(alive<MAX_TARGETS){ spawnTarget(); alive++; }
+}
+function updateTargets() {
+    for(var i=targets.length-1;i>=0;i--) {
+        var t=targets[i];
+        if(!t.alive){ targets.splice(i,1); continue; }
+        if(t.scaleAnim<1.0) t.scaleAnim=Math.min(1.0,t.scaleAnim+0.05);
+
+        var nx = t.x + Math.sin(t.faceAngle)*t.walkSpeed;
+        var nz = t.z + Math.cos(t.faceAngle)*t.walkSpeed;
+        var RAD = 0.25;  // raio de colisão do personagem
+
+        // Colisão com paredes da sala
+        var hitWall = (Math.abs(nx) > WALK_BOUND || Math.abs(nz) > WALK_BOUND);
+        // Colisão com obstáculos (pilares, muros, caixas)
+        var hitProp = collidesWithObstacle(nx, nz, RAD);
+
+        if (!hitWall && !hitProp) {
+            t.x = nx;
+            t.z = nz;
+        } else {
+            // Vira em direção ao centro com leve variação aleatória
+            t.faceAngle = Math.atan2(-t.x, -t.z) + (Math.random()-0.5)*1.0;
+            t.turnTimer = 60 + Math.floor(Math.random()*80);
+            // Garante que não fique preso fora dos limites
+            t.x = Math.max(-WALK_BOUND, Math.min(WALK_BOUND, t.x));
+            t.z = Math.max(-WALK_BOUND, Math.min(WALK_BOUND, t.z));
+        }
+
+        t.walkCycle += t.walkSpeed*2.5;
+        t.turnTimer--;
+        if(t.turnTimer<=0) {
+            t.faceAngle += (Math.random()-0.5)*1.5;
+            t.turnTimer = 100+Math.floor(Math.random()*200);
+        }
+    }
+}
+
+// ============================================================
+//  HUD
+// ============================================================
+function initHUD() {
+    var s=0.036;
+    hudBuf=gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER,hudBuf);
+    gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([
+        -s,-s,0,1, s,-s,1,1, s,s,1,0,
+        -s,-s,0,1, s,s,1,0, -s,s,0,0
+    ]),gl.STATIC_DRAW);
+}
+function drawHUD() {
+    gl.useProgram(progHUD);
+    gl.disable(gl.DEPTH_TEST);
+    gl.bindBuffer(gl.ARRAY_BUFFER,hudBuf);
+    var ap=gl.getAttribLocation(progHUD,"aPos"),
+        au=gl.getAttribLocation(progHUD,"aUV");
+    gl.enableVertexAttribArray(ap); gl.vertexAttribPointer(ap,2,gl.FLOAT,false,16,0);
+    gl.enableVertexAttribArray(au); gl.vertexAttribPointer(au,2,gl.FLOAT,false,16,8);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D,TEX.crosshair);
+    gl.uniform1i(gl.getUniformLocation(progHUD,"uHudTex"),0);
+    gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);
+    gl.drawArrays(gl.TRIANGLES,0,6);
+    gl.disable(gl.BLEND); gl.enable(gl.DEPTH_TEST);
+}
+
+// ============================================================
+//  COLISÃO: retorna true se (x,z) está dentro de algum obstáculo
+// ============================================================
+var OBSTACLE_BOXES = [
+    // [ minX, maxX, minZ, maxZ ]  — mesmas posições do drawMap
+    [-10.4, -9.6,  -10.4,  -9.6],   // pilar -10,-10
+    [  9.6, 10.4,  -10.4,  -9.6],   // pilar  10,-10
+    [  9.6, 10.4,    9.6,  10.4],   // pilar  10, 10
+    [-10.4, -9.6,    9.6,  10.4],   // pilar -10, 10
+    [-13.75,-10.25,-13.75,-10.25],  // plataforma -12,-12
+    [ 10.25, 13.75,-13.75,-10.25],  // plataforma  12,-12
+    [ 10.25, 13.75, 10.25, 13.75],  // plataforma  12, 12
+    [-13.75,-10.25, 10.25, 13.75],  // plataforma -12, 12
+    [-5.2,  -4.8,   -3.0,   3.0],   // muro esquerdo
+    [  4.8,  5.2,   -3.0,   3.0],   // muro direito
+    [-0.6,   0.6,   -0.6,   0.6],   // crate  0  (placeholder) — ignorar, só muros importam
+    [  7.4,  8.6,    4.4,   5.6],   // crate  8,5
+    [ -8.6,  -7.4,  -5.6,  -4.4],  // crate -8,-5
+    [  2.4,  3.6,  -10.6,  -9.4],  // crate  3,-10
+    [ -3.6,  -2.4,   9.4,  10.6]   // crate -3, 10
+];
+function collidesWithObstacle(x, z, r) {
+    for (var i = 0; i < OBSTACLE_BOXES.length; i++) {
+        var b = OBSTACLE_BOXES[i];
+        if (x+r > b[0] && x-r < b[1] && z+r > b[2] && z-r < b[3]) return true;
+    }
+    return false;
+}
+
+// ============================================================
+//  MAPA — arena sci-fi 40×40
+//  Props: 4 pilares, 4 plataformas elevadas, 2 muros centrais
+// ============================================================
+function drawMap(lp, cp, vp) {
+    var RH=ROOM_HALF, RHH=ROOM_HEIGHT;
+
+    // Chão com textura de madeira (tiling 8×8)
+    drawMesh(geoFloor, math.multiply(mat4T(0,0,0), mat4S(1,1,1)),
+             TEX.floor, true, null, lp,cp,vp, 0.25);
+
+    // Teto com textura de aço (cor mais escura)
+    var ceilM=math.multiply(mat4T(0,RHH,0), mat4S(1,-1,1));
+    drawMesh(geoCeiling, ceilM, TEX.ceiling, true, null, lp,cp,vp, 0.15);
+
+    // 4 Paredes principais — textura exterior wall
+    var wallDefs=[
+        { t:mat4T(0,RHH/2,-RH), s:mat4S(RH*2,RHH,0.15) },
+        { t:mat4T(0,RHH/2, RH), s:mat4S(RH*2,RHH,0.15) },
+        { t:mat4T(-RH,RHH/2,0), s:mat4S(0.15,RHH,RH*2) },
+        { t:mat4T( RH,RHH/2,0), s:mat4S(0.15,RHH,RH*2) }
+    ];
+    for(var w=0;w<4;w++) {
+        drawMesh(geoUnitBox,
+            math.multiply(wallDefs[w].t, wallDefs[w].s),
+            TEX.wall, true, null, lp,cp,vp, 0.22);
+    }
+
+    // ---- PROPS INTERNOS (textura scifi) ----
+
+    // 4 Pilares nos cantos internos (posição ±10, ±10)
+    var pillarPos=[[-10,0,-10],[10,0,-10],[10,0,10],[-10,0,10]];
+    for(var i=0;i<4;i++) {
+        var pp=pillarPos[i];
+        var pillarM=math.multiply(
+            mat4T(pp[0], RHH/2, pp[2]),
+            mat4S(0.8, RHH, 0.8)
+        );
+        drawMesh(geoUnitBox, pillarM, TEX.scifi, true, null, lp,cp,vp, 0.20);
+    }
+
+    // 4 Plataformas elevadas (y=0..0.6) perto dos pilares
+    var platPos=[[-12,0,-12],[12,0,-12],[12,0,12],[-12,0,12]];
+    for(var i=0;i<4;i++) {
+        var pp=platPos[i];
+        var platM=math.multiply(
+            mat4T(pp[0], 0.3, pp[2]),
+            mat4S(3.5, 0.6, 3.5)
+        );
+        drawMesh(geoUnitBox, platM, TEX.scifi, true, null, lp,cp,vp, 0.22);
+    }
+
+    // 2 Muros centrais longos (cobertura central)
+    var muros=[
+        { t:mat4T(-5, 1.0, 0), s:mat4S(0.4, 2.0, 6.0) },
+        { t:mat4T( 5, 1.0, 0), s:mat4S(0.4, 2.0, 6.0) }
+    ];
+    for(var i=0;i<2;i++) {
+        drawMesh(geoUnitBox,
+            math.multiply(muros[i].t, muros[i].s),
+            TEX.scifi, true, null, lp,cp,vp, 0.20);
+    }
+
+    // 4 Caixas de cobertura espalhadas
+    var crates=[
+        [8, 0.5, 5], [-8, 0.5, -5], [3, 0.5, -10], [-3, 0.5, 10]
+    ];
+    for(var i=0;i<4;i++) {
+        var cr=crates[i];
+        var crateM=math.multiply(mat4T(cr[0],cr[1],cr[2]), mat4S(1.2,1.0,1.2));
+        drawMesh(geoUnitBox, crateM, TEX.scifi, true, null, lp,cp,vp, 0.22);
+    }
+
+    // (indicador de luz removido — a iluminação já é visível nas superfícies)
+}
+
+// ============================================================
+//  LOOP PRINCIPAL
+// ============================================================
+function draw() {
+    if(!gameRunning) return;
+
+    // Câmera FPS
+    camYaw   += mouseDX*0.0020;
+    camPitch += mouseDY*0.0020;
+    camPitch  = Math.max(-Math.PI*0.45, Math.min(Math.PI*0.45, camPitch));
+    mouseDX=0; mouseDY=0;
+
+    var speed=0.09, cy=Math.cos(camYaw), sy=Math.sin(camYaw);
+    if(keys['w']||keys['arrowup'])    { camPos[0]+=sy*speed; camPos[2]-=cy*speed; }
+    if(keys['s']||keys['arrowdown'])  { camPos[0]-=sy*speed; camPos[2]+=cy*speed; }
+    if(keys['a']||keys['arrowleft'])  { camPos[0]-=cy*speed; camPos[2]-=sy*speed; }
+    if(keys['d']||keys['arrowright']) { camPos[0]+=cy*speed; camPos[2]+=sy*speed; }
+    var B=ROOM_HALF-0.5;
+    camPos[0]=Math.max(-B,Math.min(B,camPos[0]));
+    camPos[2]=Math.max(-B,Math.min(B,camPos[2]));
+
+    // Luz animada — orbita a sala
+    lightAngle+=0.007;
+    var lx=Math.cos(lightAngle)*LIGHT_RADIUS;
+    var lz=Math.sin(lightAngle)*LIGHT_RADIUS;
+    var lightPos=[lx,LIGHT_Y,lz];
+
+    updateTargets();
+
+    // View/Projection (padrão do professor)
+    var cp2=Math.cos(camPitch), sp=Math.sin(camPitch);
+    var lookAt=[camPos[0]+sy*cp2, camPos[1]-sp, camPos[2]-cy*cp2];
+    var upPt  =[camPos[0],       camPos[1]+1,   camPos[2]];
+    var proj    =createPerspective(70, gl.canvas.width/gl.canvas.height, 0.05, 100);
+    var view    =createCamera(camPos, lookAt, upPt);
+    var viewProj=math.multiply(proj, view);
+
+    gl.clearColor(0.05,0.05,0.08,1.0);
+    gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
+    gl.enable(gl.DEPTH_TEST);
+
+    // Mapa (chão, teto, paredes, props)
+    drawMap(lightPos, camPos, viewProj);
+
+    // Figuras humanas
+    for(var i=0;i<targets.length;i++)
+        if(targets[i].alive) drawHuman(targets[i], lightPos, camPos, viewProj);
+
+    // ---- Traçadores de bala ----
+    for(var i=bullets.length-1;i>=0;i--) {
+        var b=bullets[i];
+        b.x+=b.dx; b.y+=b.dy; b.z+=b.dz;
+        b.life--;
+        if(b.life<=0){ bullets.splice(i,1); continue; }
+        // Desenha como esfera pequena amarela
+        var bM=math.multiply(mat4T(b.x,b.y,b.z), mat4S(0.04,0.04,0.04));
+        drawMesh(geoSphere, bM, null, false, [1.0,0.85,0.1], lightPos, camPos, viewProj, 1.0);
+    }
+
+    // ---- Arma FPS — fixada em view space (não sofre pitch do world) ----
+    // Estratégia: desenha com a própria viewProj mas com model no espaço da câmera
+    if(objGun) {
+        // Offset fixo no espaço de câmera: direita +0.18, baixo -0.20, frente -0.38
+        // Convertido para world: right = (cy, 0, sy), up = (0,1,0), fwd = (-sy,0,cy) yaw-only
+        var rX2=cy, rZ2=sy;          // right horizontal
+        var fX2=sy, fZ2=-cy;         // forward horizontal (yaw only, SEM pitch)
+        var gx = camPos[0] + fX2*0.38 + rX2*0.18;
+        var gy = camPos[1] - 0.20;
+        var gz = camPos[2] + fZ2*0.38 + rZ2*0.18;
+        var gunM = math.multiply(
+            mat4T(gx, gy, gz),
+            math.multiply(mat4RY(camYaw + Math.PI), mat4S(1.0,1.0,1.0))
+        );
+        drawMesh(objGun, gunM, TEX.gunmap, true, null, lightPos, camPos, viewProj);
+    }
+
+    // ---- Flash de tiro (overlay branco semi-transparente) ----
+    if(shootFlash>0) {
+        shootFlash--;
+        // Reusa o progHUD para desenhar um quad full-screen branco com alpha
+        gl.useProgram(progHUD);
+        gl.disable(gl.DEPTH_TEST);
+        gl.bindBuffer(gl.ARRAY_BUFFER,hudBuf);
+        // Quad full-screen temporário
+        var fs=1.0;
+        var flashVerts=new Float32Array([
+            -fs,-fs,0,1, fs,-fs,1,1, fs,fs,1,0,
+            -fs,-fs,0,1, fs,fs,1,0, -fs,fs,0,0
+        ]);
+        var flashBuf=gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER,flashBuf);
+        gl.bufferData(gl.ARRAY_BUFFER,flashVerts,gl.DYNAMIC_DRAW);
+        var ap2=gl.getAttribLocation(progHUD,"aPos"),
+            au2=gl.getAttribLocation(progHUD,"aUV");
+        gl.enableVertexAttribArray(ap2); gl.vertexAttribPointer(ap2,2,gl.FLOAT,false,16,0);
+        gl.enableVertexAttribArray(au2); gl.vertexAttribPointer(au2,2,gl.FLOAT,false,16,8);
+        // Textura sólida branca com alpha proporcional ao flash restante
+        var flashAlpha=shootFlash/6;
+        var flashCanvas=document.createElement('canvas');
+        flashCanvas.width=flashCanvas.height=2;
+        var fctx=flashCanvas.getContext('2d');
+        fctx.fillStyle='rgba(255,220,100,'+flashAlpha+')';
+        fctx.fillRect(0,0,2,2);
+        var flashTex=uploadTexture(flashCanvas);
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D,flashTex);
+        gl.uniform1i(gl.getUniformLocation(progHUD,"uHudTex"),0);
+        gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);
+        gl.drawArrays(gl.TRIANGLES,0,6);
+        gl.disable(gl.BLEND); gl.enable(gl.DEPTH_TEST);
+        gl.deleteTexture(flashTex);
+        gl.deleteBuffer(flashBuf);
+    }
+
+    drawHUD();
+    requestAnimationFrame(draw);
+}
+
+// ============================================================
+//  INIT WEBGL
+// ============================================================
+function initGL() {
+    var canvas=document.getElementById("glcanvas1");
+    gl=getGL(canvas); if(!gl) return;
+
+    prog3D=createProgram(gl,
+        document.getElementById("vertex-shader").text,
+        document.getElementById("frag-shader").text);
+    progHUD=createProgram(gl,
+        document.getElementById("hud-vert").text,
+        document.getElementById("hud-frag").text);
+
+    gl.useProgram(prog3D);
+    gl.enable(gl.DEPTH_TEST);
+    gl.viewport(0,0,canvas.width,canvas.height);
+
+    // Geometrias procedurais
+    geoSphere  = mkBufs(buildSphere(1.0,20,20));
+    geoFloor   = mkBufs(buildQuad(40,8));   // 40 unidades, 8×8 tiles de textura
+    geoCeiling = mkBufs(buildQuad(40,4));
+    geoUnitBox = mkBufs(buildBox(1,1,1));
+
+    // Textura de crosshair (sempre procedural)
+    TEX.crosshair = uploadTexture(makeCrosshair());
+
+    // Texturas de arquivo com fallback procedural
+    loadTexOrFallback('floor',
+        'assets/wood_floor/WoodFloor043_4K-JPG_Color.jpg',
+        function(){ return makeChecker('#5a3e28','#4a3020',4); });
+
+    loadTexOrFallback('wall',
+        'assets/exterior_wall/textures/exterior_wall_cladding_02_diff_4k.jpg',
+        function(){ return makeChecker('#4a4038','#3a3028',4); });
+
+    loadTexOrFallback('ceiling',
+        'assets/scratched_up_steel/scratched-up-steel_albedo.png',
+        function(){ return makeChecker('#2e2e32','#22222a',2); });
+
+    loadTexOrFallback('scifi',
+        'assets/modula scifi megakit/Textures/T_Trim_01_BaseColor.png',
+        function(){ return makeChecker('#1a2535','#0d1820',6); });
+
+    loadTexOrFallback('gunmap',
+        'assets/kenney/blaster/Models/OBJ format/Textures/colormap.png',
+        function(){ return makeChecker('#555555','#444444',2); });
+
+    // Skins dos personagens
+    loadTexOrFallback('skinF',  'assets/kenney/characters/survivors/Skins/survivorFemaleA.png',
+        function(){ return makeSolid('#c07858'); });
+    loadTexOrFallback('skinM',  'assets/kenney/characters/survivors/Skins/survivorMaleB.png',
+        function(){ return makeSolid('#b86e48'); });
+    loadTexOrFallback('skinZA', 'assets/kenney/characters/survivors/Skins/zombieA.png',
+        function(){ return makeSolid('#8ea060'); });
+    loadTexOrFallback('skinZC', 'assets/kenney/characters/survivors/Skins/zombieC.png',
+        function(){ return makeSolid('#888880'); });
+
+    // Modelo OBJ da arma (blaster Kenney)
+    fetch('assets/kenney/blaster/Models/OBJ format/blaster-a.obj')
+        .then(function(r){ return r.ok?r.text():null; })
+        .then(function(txt){
+            if(txt){ objGun=mkBufs(parseOBJ(txt));
+                console.log("blaster-a.obj carregado: "+objGun.count+" vértices"); }
+        }).catch(function(){});
+
+    initHUD();
+}
+
+// ============================================================
+//  RAYCASTING + TIRO
+// ============================================================
+function getCamRay() {
+    var cy=Math.cos(camYaw),sy=Math.sin(camYaw),
+        cp=Math.cos(camPitch),sp=Math.sin(camPitch);
+    return [sy*cp, -sp, -cy*cp];
+}
+function raySphere(o,d,cx,cy,cz,r) {
+    var ox=o[0]-cx,oy=o[1]-cy,oz=o[2]-cz;
+    var a=d[0]*d[0]+d[1]*d[1]+d[2]*d[2];
+    var b=2*(ox*d[0]+oy*d[1]+oz*d[2]);
+    var c=ox*ox+oy*oy+oz*oz-r*r;
+    var disc=b*b-4*a*c;
+    if(disc<0) return false;
+    return (-b-Math.sqrt(disc))/(2*a)>0.05;
+}
+function shoot() {
+    if(!gameRunning) return;
+    shots++;
+
+    // Flash visual de tiro
+    shootFlash = 6;
+
+    // Spawna traçador de bala partindo da câmera
+    var rd=getCamRay();
+    var SPEED=1.2;
+    bullets.push({
+        x:camPos[0]+rd[0]*0.5,
+        y:camPos[1]+rd[1]*0.5,
+        z:camPos[2]+rd[2]*0.5,
+        dx:rd[0]*SPEED, dy:rd[1]*SPEED, dz:rd[2]*SPEED,
+        life:28
+    });
+
+    var closest=Infinity, hitIdx=-1;
+    for(var i=0;i<targets.length;i++) {
+        var t=targets[i]; if(!t.alive) continue;
+        if(raySphere(camPos,rd, t.x,0.9,t.z, 0.62)) {
+            var dx=t.x-camPos[0],dz=t.z-camPos[2];
+            var dist=Math.sqrt(dx*dx+dz*dz);
+            if(dist<closest){ closest=dist; hitIdx=i; }
+        }
+    }
+    if(hitIdx>=0) {
+        targets[hitIdx].alive=false; hits++;
+        var pts=Math.round(40+closest*10);
+        score+=pts;
+        document.getElementById('score').textContent=score;
+        document.getElementById('hits').textContent=hits;
+        refillTargets();
+    }
+    document.getElementById('shots').textContent=shots;
+}
+
+// ============================================================
+//  INPUT
+// ============================================================
+function initInput() {
+    var canvas=document.getElementById("glcanvas1");
+    document.addEventListener('keydown',function(e){ keys[e.key.toLowerCase()]=true; });
+    document.addEventListener('keyup',  function(e){ keys[e.key.toLowerCase()]=false; });
+    canvas.addEventListener('click', function(){
+        if(!pointerLocked) canvas.requestPointerLock();
+        else shoot();
+    });
+    document.addEventListener('pointerlockchange',function(){
+        pointerLocked=(document.pointerLockElement===canvas);
+    });
+    document.addEventListener('mousemove',function(e){
+        if(pointerLocked){ mouseDX+=e.movementX; mouseDY+=e.movementY; }
+    });
+}
+
+// ============================================================
+//  INICIAR / ENCERRAR JOGO
+// ============================================================
+function startGame() {
+    document.getElementById('overlay').style.display='none';
+    score=0; shots=0; hits=0; timeLeft=30;
+    targets=[];
+    camPos=[0,1.8,14]; camYaw=0; camPitch=0;
+    ['score','shots','hits'].forEach(function(id){ document.getElementById(id).textContent=0; });
+    document.getElementById('timer').textContent=30;
+    refillTargets();
+    gameRunning=true;
+    document.getElementById("glcanvas1").requestPointerLock();
+    clearInterval(timerInterval);
+    timerInterval=setInterval(function(){
+        timeLeft--;
+        document.getElementById('timer').textContent=timeLeft;
+        if(timeLeft<=0){
+            clearInterval(timerInterval); gameRunning=false;
+            document.exitPointerLock(); showEnd();
+        }
+    },1000);
+    requestAnimationFrame(draw);
+}
+function showEnd() {
+    var acc=shots>0?Math.round(hits/shots*100):0;
+    var ov=document.getElementById('overlay');
+    ov.innerHTML=
+        '<h1 style="color:#ff0">Tempo Esgotado!</h1>'+
+        '<p style="font-size:20px;color:#eee">Pontuação: <b>'+score+'</b></p>'+
+        '<p style="color:#aaa">Tiros: '+shots+'&nbsp;|&nbsp;Acertos: '+hits+'&nbsp;|&nbsp;Precisão: '+acc+'%</p>'+
+        '<button id="btnStart" style="margin-top:16px">Jogar Novamente</button>';
+    ov.style.display='flex';
+    document.getElementById('btnStart').addEventListener('click',startGame);
+}
+
+// ============================================================
+//  ENTRY POINT
+// ============================================================
+window.onload = function() {
+    initGL();
+    initInput();
+    document.getElementById('btnStart').addEventListener('click', startGame);
+    document.getElementById('loading').textContent = 'Assets prontos — clique em Jogar!';
+};
+</script>
+</body>
+</html>
