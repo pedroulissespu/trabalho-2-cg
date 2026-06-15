@@ -85,7 +85,7 @@ Clique com botão direito em `index.html` → **Open with Live Server**.
 ## Equipe
 
 - Pedro Ulisses Pereira Castro Maia - N° de Matrícula 1607926
-- (Perguntar Depois para Minha dupla)
+- Victor Araújo Silva - N° de Matrícula 1752870
 
 ## Links
 
