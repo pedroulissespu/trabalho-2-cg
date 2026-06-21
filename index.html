@@ -46,6 +46,7 @@ uniform int       uUseTex;
 uniform vec3      uSolidColor;
 uniform vec3      uLightColor;
 uniform float     uAmbient;   // componente ambiente ajustável por objeto
+uniform float     uUnlit;     // 1.0 = textura/cor sem Phong (paleta Kenney)
 
 varying vec2 vTexCoord;
 varying vec3 vNormal;
@@ -68,9 +69,10 @@ void main() {
         base = uSolidColor;
     }
 
-    vec3 col = uLightColor * (uAmbient * base
+    vec3 lit = uLightColor * (uAmbient * base
                             + diff * base * 0.65
                             + spec * vec3(1.0) * 0.40);
+    vec3 col = mix(lit, base, uUnlit);
     gl_FragColor = vec4(col, 1.0);
 }
 </script>
@@ -90,39 +92,522 @@ void main() {
 }
 </script>
 
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+
 <style>
+:root {
+  --bg:        #0b0b0c;
+  --panel:     #141416;
+  --panel-alt: #1a1a1d;
+  --border:    #2c2c32;
+  --border-hi: #3d3d45;
+  --text:      #e4e4e7;
+  --muted:     #71717a;
+  --accent:    #f59e0b;
+  --accent-dk: #b45309;
+  --accent-glow: rgba(245,158,11,0.15);
+  --danger:    #ef4444;
+  --success:   #22c55e;
+  --mono:      'Barlow Condensed', 'Segoe UI', sans-serif;
+  --sans:      'Barlow', 'Segoe UI', sans-serif;
+}
+
 * { margin:0; padding:0; box-sizing:border-box; }
-body { background:#0a0a0f; display:flex; align-items:center; justify-content:center; height:100vh; font-family:'Courier New',monospace; color:#eee; }
-#ui { position:absolute; top:14px; left:50%; transform:translateX(-50%); display:flex; gap:36px; font-size:21px; text-shadow:0 0 8px #0ff; pointer-events:none; }
-#ui span { background:rgba(0,0,0,0.6); padding:4px 16px; border-radius:6px; border:1px solid rgba(0,255,255,0.2); }
-#overlay { position:absolute; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.88);
-           display:flex; flex-direction:column; align-items:center; justify-content:center; gap:18px; }
-#overlay h1 { font-size:46px; color:#0ff; text-shadow:0 0 24px #0ff; }
-#overlay p  { font-size:15px; color:#aaa; max-width:460px; text-align:center; line-height:1.6; }
-#overlay button { font-size:20px; padding:12px 44px; background:#0ff; color:#000; border:none; border-radius:8px; cursor:pointer; font-weight:bold; letter-spacing:1px; }
-#overlay button:hover { background:#0cc; }
-#loading { font-size:14px; color:#555; }
-#glcanvas1 { display:block; cursor:none; }
+
+body {
+  background: var(--bg);
+  width: 100vw;
+  height: 100vh;
+  font-family: var(--sans);
+  color: var(--text);
+  overflow: hidden;
+}
+
+#game-wrap {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  line-height: 0;
+}
+
+#glcanvas1 {
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: none;
+}
+
+/* ── HUD ── */
+#hud {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  font-family: var(--mono);
+}
+
+#hud-top {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  display: flex;
+  align-items: stretch;
+  background: linear-gradient(180deg, rgba(11,11,12,0.92) 0%, rgba(11,11,12,0.55) 70%, transparent 100%);
+  border-bottom: 1px solid var(--border);
+}
+
+#timer-bar-wrap {
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  height: 2px;
+  background: var(--border);
+}
+
+#timer-bar {
+  height: 100%;
+  width: 100%;
+  background: var(--accent);
+  transition: width 1s linear, background 0.3s;
+}
+
+.hud-stat {
+  flex: 1;
+  padding: 10px 16px 14px;
+  border-right: 1px solid var(--border);
+  min-width: 0;
+}
+.hud-stat:last-child { border-right: none; }
+
+.hud-label {
+  display: block;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 2px;
+}
+
+.hud-value {
+  display: block;
+  font-size: 26px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.hud-value.accent { color: var(--accent); }
+
+#hud-acc {
+  position: absolute;
+  bottom: 14px;
+  right: 14px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  padding: 6px 12px;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+#hud-acc .hud-label { margin: 0; font-size: 9px; }
+#hud-acc .hud-value { font-size: 18px; }
+
+#hud-corner {
+  position: absolute;
+  bottom: 14px;
+  left: 14px;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+  opacity: 0.6;
+}
+
+/* ── Overlay (menu / fim) ── */
+#overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(8,8,9,0.94);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+}
+
+.overlay-inner {
+  width: min(520px, 92%);
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.overlay-header {
+  padding: 28px 32px 24px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-bottom: none;
+  position: relative;
+}
+.overlay-header::before,
+.overlay-header::after {
+  content: '';
+  position: absolute;
+  width: 12px; height: 12px;
+  border-color: var(--accent);
+  border-style: solid;
+}
+.overlay-header::before { top: -1px; left: -1px; border-width: 2px 0 0 2px; }
+.overlay-header::after  { top: -1px; right: -1px; border-width: 2px 2px 0 0; }
+
+.overlay-tag {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 8px;
+}
+
+.overlay-header h1 {
+  font-family: var(--mono);
+  font-size: 42px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  line-height: 1;
+  color: var(--text);
+}
+.overlay-header h1 span { color: var(--accent); }
+
+.overlay-sub {
+  margin-top: 10px;
+  font-size: 13px;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+}
+
+.overlay-body {
+  padding: 24px 32px;
+  background: var(--panel-alt);
+  border: 1px solid var(--border);
+  border-top: 1px solid var(--border-hi);
+}
+
+.controls-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1px;
+  background: var(--border);
+  border: 1px solid var(--border);
+  margin-bottom: 20px;
+}
+
+.ctrl-item {
+  background: var(--panel);
+  padding: 10px 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.ctrl-item kbd {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text);
+  background: var(--panel-alt);
+  border: 1px solid var(--border-hi);
+  padding: 3px 7px;
+  min-width: 28px;
+  text-align: center;
+  letter-spacing: 0.05em;
+}
+
+.overlay-desc {
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.65;
+  margin-bottom: 20px;
+}
+
+.option-group { margin-bottom: 16px; }
+.option-label {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+.option-row {
+  display: flex;
+  gap: 1px;
+  background: var(--border);
+  border: 1px solid var(--border);
+}
+.option-btn {
+  flex: 1;
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 10px 8px;
+  background: var(--panel);
+  color: var(--muted);
+  border: none;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.option-btn:hover { color: var(--text); background: var(--panel-alt); }
+.option-btn.active {
+  background: rgba(245,158,11,0.12);
+  color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent-dk);
+}
+
+.weapon-hint {
+  margin: 10px 0 16px;
+  padding: 10px 14px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--accent-dk);
+}
+.weapon-hint-title {
+  display: block;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 4px;
+}
+.weapon-hint-desc {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+#scope-overlay {
+  display: none;
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 6;
+}
+#scope-overlay.active { display: block; }
+
+#scope-overlay .scope-lens {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: min(52vmin, 52vh);
+  height: min(52vmin, 52vh);
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.93);
+  border: 4px solid rgba(12, 12, 16, 0.95);
+  outline: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+#scope-overlay .scope-cross-v,
+#scope-overlay .scope-cross-h {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  background: rgba(255, 255, 255, 0.45);
+  pointer-events: none;
+}
+#scope-overlay .scope-cross-v { width: 1px; height: 18px; }
+#scope-overlay .scope-cross-h { width: 18px; height: 1px; }
+
+#scope-overlay .scope-dot {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 3px;
+  height: 3px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: rgba(245, 158, 11, 0.9);
+  box-shadow: 0 0 4px rgba(245, 158, 11, 0.5);
+}
+
+.btn-primary {
+  display: block;
+  width: 100%;
+  font-family: var(--mono);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  padding: 14px 24px;
+  background: var(--accent);
+  color: #0b0b0c;
+  border: none;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.1s;
+  position: relative;
+}
+.btn-primary:hover { background: #fbbf24; }
+.btn-primary:active { transform: scale(0.985); }
+.btn-primary::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border: 1px solid rgba(255,255,255,0.12);
+  pointer-events: none;
+}
+
+.overlay-footer {
+  padding: 12px 32px 20px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-top: none;
+  position: relative;
+}
+.overlay-footer::before,
+.overlay-footer::after {
+  content: '';
+  position: absolute;
+  width: 12px; height: 12px;
+  border-color: var(--accent);
+  border-style: solid;
+}
+.overlay-footer::before { bottom: -1px; left: -1px; border-width: 0 0 2px 2px; }
+.overlay-footer::after  { bottom: -1px; right: -1px; border-width: 0 2px 2px 0; }
+
+#loading {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* ── Tela de fim ── */
+.results-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1px;
+  background: var(--border);
+  border: 1px solid var(--border);
+  margin-bottom: 20px;
+}
+.result-cell {
+  background: var(--panel);
+  padding: 16px 12px;
+  text-align: center;
+}
+.result-cell .hud-label { margin-bottom: 6px; }
+.result-cell .hud-value { font-size: 28px; }
+.result-cell.highlight .hud-value { color: var(--accent); font-size: 32px; }
+
+.overlay-end .overlay-header h1 { font-size: 28px; }
+.overlay-end .overlay-tag { color: var(--danger); }
+
+#hud.hidden { display: none; }
 </style>
 </head>
 <body>
 
-<div id="ui">
-  <span>Pontos: <b id="score">0</b></span>
-  <span>Tempo: <b id="timer">30</b>s</span>
-  <span>Tiros: <b id="shots">0</b></span>
-  <span>Acertos: <b id="hits">0</b></span>
-</div>
+<div id="game-wrap">
+  <canvas id="glcanvas1"></canvas>
+  <div id="scope-overlay">
+    <div class="scope-lens"></div>
+    <div class="scope-cross-v"></div>
+    <div class="scope-cross-h"></div>
+    <div class="scope-dot"></div>
+  </div>
 
-<canvas id="glcanvas1" width="960" height="620"></canvas>
+  <div id="hud" class="hidden">
+    <div id="hud-top">
+      <div class="hud-stat">
+        <span class="hud-label">Pontuação</span>
+        <span class="hud-value accent" id="score">0</span>
+      </div>
+      <div class="hud-stat">
+        <span class="hud-label">Tempo</span>
+        <span class="hud-value" id="timer">30</span>
+      </div>
+      <div class="hud-stat">
+        <span class="hud-label">Tiros</span>
+        <span class="hud-value" id="shots">0</span>
+      </div>
+      <div class="hud-stat">
+        <span class="hud-label">Acertos</span>
+        <span class="hud-value" id="hits">0</span>
+      </div>
+      <div id="timer-bar-wrap"><div id="timer-bar"></div></div>
+    </div>
+    <div id="hud-acc">
+      <span class="hud-label">Precisão</span>
+      <span class="hud-value" id="accuracy">—</span>
+    </div>
+    <div id="hud-corner">AIM TRAINER · CG</div>
+  </div>
 
-<div id="overlay">
-  <h1>AimLab</h1>
-  <p>Mouse para mirar &nbsp;·&nbsp; <b>WASD</b> para mover<br>
-     Clique para atirar nos alvos — você tem <b>30 segundos</b>!<br>
-     Alvos distantes valem mais pontos.</p>
-  <button id="btnStart">Jogar</button>
-  <p id="loading" style="font-size:12px;color:#444">Carregando assets...</p>
+  <div id="overlay">
+    <div class="overlay-inner" id="overlay-content">
+      <div class="overlay-header">
+        <div class="overlay-tag">Treino de Mira</div>
+        <h1>AIM<span>LAB</span></h1>
+        <p class="overlay-sub" id="menu-subtitle">Sessão de 30 segundos · Alvos em movimento</p>
+      </div>
+      <div class="overlay-body">
+        <div class="option-group">
+          <div class="option-label">Duração da Sessão</div>
+          <div class="option-row" id="opt-duration">
+            <button type="button" class="option-btn" data-value="10">10s</button>
+            <button type="button" class="option-btn active" data-value="30">30s</button>
+            <button type="button" class="option-btn" data-value="45">45s</button>
+          </div>
+        </div>
+        <div class="option-group">
+          <div class="option-label">Comportamento dos Alvos</div>
+          <div class="option-row" id="opt-bots">
+            <button type="button" class="option-btn active" data-value="moving">Em Movimento</button>
+            <button type="button" class="option-btn" data-value="static">Parados</button>
+          </div>
+        </div>
+        <div class="option-group">
+          <div class="option-label">Arma</div>
+          <div class="option-row" id="opt-weapon">
+            <button type="button" class="option-btn" data-value="pistol">Pistola</button>
+            <button type="button" class="option-btn active" data-value="rifle">Fuzil</button>
+            <button type="button" class="option-btn" data-value="sniper">Sniper</button>
+          </div>
+          <p class="weapon-hint" id="weapon-hint">
+            <strong class="weapon-hint-title">Fuzil</strong>
+            <span class="weapon-hint-desc">Alta cadência de tiro. Modo padrão do treino.</span>
+          </p>
+        </div>
+        <div class="controls-grid">
+          <div class="ctrl-item"><kbd>W A S D</kbd> Movimentação</div>
+          <div class="ctrl-item"><kbd>MOUSE</kbd> Mirar</div>
+          <div class="ctrl-item"><kbd>CLIQUE</kbd> Atirar</div>
+          <div class="ctrl-item"><kbd>ESC</kbd> Liberar cursor</div>
+        </div>
+        <p class="overlay-desc">
+          Elimine os alvos que aparecem na arena. Alvos mais distantes
+          concedem maior pontuação. Mantenha a precisão alta.
+        </p>
+        <button type="button" class="btn-primary" id="btnStart">Iniciar Sessão</button>
+      </div>
+      <div class="overlay-footer">
+        <p id="loading">Carregando assets...</p>
+      </div>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -133,8 +618,44 @@ var ROOM_HALF   = 20;
 var ROOM_HEIGHT = 10;
 var WALK_BOUND  = 18;
 var MAX_TARGETS = 8;
-var LIGHT_RADIUS = 10;
-var LIGHT_Y      =  7;
+var LIGHT_POS    = [0, 7, 0];
+
+// ============================================================
+//  ARMAS (blaster-k / blaster-r / blaster-f)
+// ============================================================
+var WEAPON_DEFS = {
+    pistol: {
+        id: 'pistol', name: 'Pistola', model: 'blaster-k',
+        objPath: 'assets/kenney/blaster/blaster-k/blaster-k.obj',
+        texPath: 'assets/kenney/blaster/blaster-k/textures/colormap.png',
+        viewPos: [0.17, -0.10, -0.32], viewScale: 0.39, viewTilt: -0.10, center: [0, 0.02, -0.045],
+        fireDelayMs: 480, fov: 70, scopeFov: 70, canScope: false,
+        hint: 'Disparos espaçados. Arma leve e compacta.'
+    },
+    rifle: {
+        id: 'rifle', name: 'Fuzil', model: 'blaster-r',
+        objPath: 'assets/kenney/blaster/blaster-r/blaster-r.obj',
+        texPath: 'assets/kenney/blaster/blaster-r/textures/colormap.png',
+        viewPos: [0.20, -0.22, -0.42], viewScale: 0.72, viewTilt: -0.08, center: [0, 0.08, 0.0],
+        fireDelayMs: 0, fov: 70, scopeFov: 70, canScope: false,
+        hint: 'Alta cadência de tiro. Modo padrão do treino.'
+    },
+    sniper: {
+        id: 'sniper', name: 'Sniper', model: 'blaster-f',
+        objPath: 'assets/kenney/blaster/blaster-f/blaster-f.obj',
+        texPath: 'assets/kenney/blaster/blaster-f/textures/colormap.png',
+        viewPos: [0.20, -0.16, -0.36], viewScale: 0.86, viewTilt: -0.06, center: [0, 0.04, 0.08],
+        fireDelayMs: 1400, fov: 70, scopeFov: 26, canScope: true,
+        hint: 'Disparos lentos e precisos. Segure o botão direito para mirar.'
+    }
+};
+
+var weaponMeshes = {};   // id → { buf, tex, ready }
+var selectedWeaponId = 'rifle';
+var lastShotTime = 0;
+var scopeActive = false;
+
+function getCurrentWeapon() { return WEAPON_DEFS[selectedWeaponId]; }
 
 // ============================================================
 //  ESTADO GLOBAL
@@ -145,13 +666,12 @@ var hudBuf;
 
 // Texturas carregadas
 var TEX = {};
-/*  Chaves: floor, wall, ceiling, scifi, gunmap,
+/*  Chaves: floor, wall, ceiling, scifi,
             skinF, skinM, skinZA, skinZC, crosshair  */
 
-// Modelos OBJ
-var objGun = null;
-
+// Modelos OBJ das armas (ver weaponMeshes)
 var score=0, shots=0, hits=0, timeLeft=30;
+var sessionDuration=30, botsMoving=true;
 var gameRunning=false, timerInterval=null;
 
 // Câmera FPS
@@ -159,15 +679,11 @@ var camPos=[0, 1.8, 14];
 var camYaw=0, camPitch=0;
 var keys={}, mouseDX=0, mouseDY=0, pointerLocked=false;
 
-// Luz animada
-var lightAngle=0;
-
 // Alvos
 var targets=[];
 
-// Efeito de tiro
-var shootFlash = 0;       // frame counter do flash branco na tela
-var bullets   = [];       // traçadores: {x,y,z, dx,dy,dz, life}
+// Traçadores de tiro
+var bullets   = [];       // {x,y,z, dx,dy,dz, life}
 
 // ============================================================
 //  VARIANTES DE PERSONAGEM
@@ -233,6 +749,10 @@ function mat4RY(a){ var c=Math.cos(a),s=Math.sin(a);
 function mat4RX(a){ var c=Math.cos(a),s=Math.sin(a);
     return math.matrix([[1,0,0,0],[0,c,-s,0],[0,s,c,0],[0,0,0,1]]); }
 function toGL(m){ return math.flatten(math.transpose(m))._data; }
+function transformPoint(m, p) {
+    var v = math.multiply(m, math.matrix([[p[0]],[p[1]],[p[2]],[1]]));
+    return [v._data[0][0], v._data[1][0], v._data[2][0]];
+}
 
 // ============================================================
 //  TEXTURAS
@@ -267,11 +787,12 @@ function makeCrosshair() {
     var cv=document.createElement('canvas'); cv.width=cv.height=64;
     var ctx=cv.getContext('2d');
     ctx.clearRect(0,0,64,64);
-    ctx.strokeStyle='rgba(255,255,255,0.92)'; ctx.lineWidth=2;
-    [[32,16,32,26],[32,38,32,48],[16,32,26,32],[38,32,48,32]].forEach(function(l){
+    ctx.strokeStyle='rgba(255,255,255,0.85)'; ctx.lineWidth=1.5;
+    [[32,20,32,28],[32,36,32,44],[20,32,28,32],[36,32,44,32]].forEach(function(l){
         ctx.beginPath(); ctx.moveTo(l[0],l[1]); ctx.lineTo(l[2],l[3]); ctx.stroke();
     });
-    ctx.beginPath(); ctx.arc(32,32,5,0,Math.PI*2); ctx.stroke();
+    ctx.fillStyle='rgba(245,158,11,0.9)';
+    ctx.beginPath(); ctx.arc(32,32,1.5,0,Math.PI*2); ctx.fill();
     return cv;
 }
 
@@ -292,6 +813,28 @@ function mkBufs(mesh) {
     return { pos:buf(mesh.positions), tex:buf(mesh.texcoords),
              nor:buf(mesh.normals),   count:mesh.vertexCount };
 }
+function flipMeshTexV(mesh) {
+    var tc = mesh.texcoords;
+    for (var i = 1; i < tc.length; i += 2) tc[i] = 1.0 - tc[i];
+    return mesh;
+}
+function setProg3DUniforms(mvp, model, lp, cp, ambient, useTex, tex, solidColor, unlit) {
+    gl.uniformMatrix4fv(gl.getUniformLocation(prog3D,"uModelViewProj"),false,toGL(mvp));
+    gl.uniformMatrix4fv(gl.getUniformLocation(prog3D,"uModel"),        false,toGL(model));
+    gl.uniform3fv(gl.getUniformLocation(prog3D,"uLightPos"),  lp);
+    gl.uniform3fv(gl.getUniformLocation(prog3D,"uCamPos"),    cp);
+    gl.uniform3fv(gl.getUniformLocation(prog3D,"uLightColor"),[1.0,0.95,0.85]);
+    gl.uniform1f (gl.getUniformLocation(prog3D,"uAmbient"),   ambient!=null?ambient:0.20);
+    gl.uniform1f (gl.getUniformLocation(prog3D,"uUnlit"),     unlit?1.0:0.0);
+    gl.uniform1i (gl.getUniformLocation(prog3D,"uUseTex"),    useTex?1:0);
+    if (useTex) {
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D,tex);
+        gl.uniform1i(gl.getUniformLocation(prog3D,"uTex"),0);
+    } else {
+        gl.uniform3fv(gl.getUniformLocation(prog3D,"uSolidColor"),solidColor);
+    }
+}
 function bindBufs(buf) {
     function attr(name,b,n){ var p=gl.getAttribLocation(prog3D,name);
         gl.bindBuffer(gl.ARRAY_BUFFER,b); gl.enableVertexAttribArray(p);
@@ -302,24 +845,21 @@ function bindBufs(buf) {
 // ============================================================
 //  DRAW MESH
 // ============================================================
-function drawMesh(buf, model, tex, useTex, solidColor, lp, cp, vp, ambient) {
+function drawMesh(buf, model, tex, useTex, solidColor, lp, cp, vp, ambient, unlit) {
     gl.useProgram(prog3D);
     bindBufs(buf);
     var mvp=math.multiply(vp,model);
-    gl.uniformMatrix4fv(gl.getUniformLocation(prog3D,"uModelViewProj"),false,toGL(mvp));
-    gl.uniformMatrix4fv(gl.getUniformLocation(prog3D,"uModel"),        false,toGL(model));
-    gl.uniform3fv(gl.getUniformLocation(prog3D,"uLightPos"),  lp);
-    gl.uniform3fv(gl.getUniformLocation(prog3D,"uCamPos"),    cp);
-    gl.uniform3fv(gl.getUniformLocation(prog3D,"uLightColor"),[1.0,0.95,0.85]);
-    gl.uniform1f (gl.getUniformLocation(prog3D,"uAmbient"),   ambient!=null?ambient:0.20);
-    gl.uniform1i (gl.getUniformLocation(prog3D,"uUseTex"),    useTex?1:0);
-    if (useTex) {
-        gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D,tex);
-        gl.uniform1i(gl.getUniformLocation(prog3D,"uTex"),0);
-    } else {
-        gl.uniform3fv(gl.getUniformLocation(prog3D,"uSolidColor"),solidColor);
-    }
+    setProg3DUniforms(mvp, model, lp, cp, ambient, useTex, tex, solidColor, unlit);
+    gl.drawArrays(gl.TRIANGLES,0,buf.count);
+}
+
+// Desenha mesh fixa na tela (espaço da câmera, sem rotação com o olhar)
+function drawMeshViewSpace(buf, model, tex, useTex, solidColor, worldLightPos, view, proj, ambient, unlit) {
+    gl.useProgram(prog3D);
+    bindBufs(buf);
+    var mvp = math.multiply(proj, model);
+    var lightView = transformPoint(view, worldLightPos);
+    setProg3DUniforms(mvp, model, lightView, [0,0,0], ambient, useTex, tex, solidColor, unlit);
     gl.drawArrays(gl.TRIANGLES,0,buf.count);
 }
 
@@ -391,7 +931,7 @@ function spawnTarget() {
         x: Math.cos(angle)*dist,
         z: Math.sin(angle)*dist,
         faceAngle: Math.random()*Math.PI*2,
-        walkCycle: Math.random()*Math.PI*2,
+        walkCycle: botsMoving ? Math.random()*Math.PI*2 : 0,
         walkSpeed: 0.012 + Math.random()*0.014,
         alive:     true,
         scaleAnim: 0,
@@ -410,32 +950,30 @@ function updateTargets() {
         if(!t.alive){ targets.splice(i,1); continue; }
         if(t.scaleAnim<1.0) t.scaleAnim=Math.min(1.0,t.scaleAnim+0.05);
 
-        var nx = t.x + Math.sin(t.faceAngle)*t.walkSpeed;
-        var nz = t.z + Math.cos(t.faceAngle)*t.walkSpeed;
-        var RAD = 0.25;  // raio de colisão do personagem
+        if (botsMoving) {
+            var nx = t.x + Math.sin(t.faceAngle)*t.walkSpeed;
+            var nz = t.z + Math.cos(t.faceAngle)*t.walkSpeed;
+            var RAD = 0.25;
 
-        // Colisão com paredes da sala
-        var hitWall = (Math.abs(nx) > WALK_BOUND || Math.abs(nz) > WALK_BOUND);
-        // Colisão com obstáculos (pilares, muros, caixas)
-        var hitProp = collidesWithObstacle(nx, nz, RAD);
+            var hitWall = (Math.abs(nx) > WALK_BOUND || Math.abs(nz) > WALK_BOUND);
+            var hitProp = collidesWithObstacle(nx, nz, RAD);
 
-        if (!hitWall && !hitProp) {
-            t.x = nx;
-            t.z = nz;
-        } else {
-            // Vira em direção ao centro com leve variação aleatória
-            t.faceAngle = Math.atan2(-t.x, -t.z) + (Math.random()-0.5)*1.0;
-            t.turnTimer = 60 + Math.floor(Math.random()*80);
-            // Garante que não fique preso fora dos limites
-            t.x = Math.max(-WALK_BOUND, Math.min(WALK_BOUND, t.x));
-            t.z = Math.max(-WALK_BOUND, Math.min(WALK_BOUND, t.z));
-        }
+            if (!hitWall && !hitProp) {
+                t.x = nx;
+                t.z = nz;
+            } else {
+                t.faceAngle = Math.atan2(-t.x, -t.z) + (Math.random()-0.5)*1.0;
+                t.turnTimer = 60 + Math.floor(Math.random()*80);
+                t.x = Math.max(-WALK_BOUND, Math.min(WALK_BOUND, t.x));
+                t.z = Math.max(-WALK_BOUND, Math.min(WALK_BOUND, t.z));
+            }
 
-        t.walkCycle += t.walkSpeed*2.5;
-        t.turnTimer--;
-        if(t.turnTimer<=0) {
-            t.faceAngle += (Math.random()-0.5)*1.5;
-            t.turnTimer = 100+Math.floor(Math.random()*200);
+            t.walkCycle += t.walkSpeed*2.5;
+            t.turnTimer--;
+            if(t.turnTimer<=0) {
+                t.faceAngle += (Math.random()-0.5)*1.5;
+                t.turnTimer = 100+Math.floor(Math.random()*200);
+            }
         }
     }
 }
@@ -453,6 +991,8 @@ function initHUD() {
     ]),gl.STATIC_DRAW);
 }
 function drawHUD() {
+    var weapon = getCurrentWeapon();
+    var scoped = weapon.canScope && scopeActive;
     gl.useProgram(progHUD);
     gl.disable(gl.DEPTH_TEST);
     gl.bindBuffer(gl.ARRAY_BUFFER,hudBuf);
@@ -460,11 +1000,18 @@ function drawHUD() {
         au=gl.getAttribLocation(progHUD,"aUV");
     gl.enableVertexAttribArray(ap); gl.vertexAttribPointer(ap,2,gl.FLOAT,false,16,0);
     gl.enableVertexAttribArray(au); gl.vertexAttribPointer(au,2,gl.FLOAT,false,16,8);
-    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D,TEX.crosshair);
-    gl.uniform1i(gl.getUniformLocation(progHUD,"uHudTex"),0);
-    gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);
-    gl.drawArrays(gl.TRIANGLES,0,6);
-    gl.disable(gl.BLEND); gl.enable(gl.DEPTH_TEST);
+    if (!scoped) {
+        gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D,TEX.crosshair);
+        gl.uniform1i(gl.getUniformLocation(progHUD,"uHudTex"),0);
+        gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);
+        gl.drawArrays(gl.TRIANGLES,0,6);
+        gl.disable(gl.BLEND);
+    }
+    gl.enable(gl.DEPTH_TEST);
+}
+function setScopeOverlay(active) {
+    var el = document.getElementById('scope-overlay');
+    if (el) el.classList.toggle('active', !!active);
 }
 
 // ============================================================
@@ -593,11 +1140,7 @@ function draw() {
     camPos[0]=Math.max(-B,Math.min(B,camPos[0]));
     camPos[2]=Math.max(-B,Math.min(B,camPos[2]));
 
-    // Luz animada — orbita a sala
-    lightAngle+=0.007;
-    var lx=Math.cos(lightAngle)*LIGHT_RADIUS;
-    var lz=Math.sin(lightAngle)*LIGHT_RADIUS;
-    var lightPos=[lx,LIGHT_Y,lz];
+    var lightPos = LIGHT_POS;
 
     updateTargets();
 
@@ -605,7 +1148,9 @@ function draw() {
     var cp2=Math.cos(camPitch), sp=Math.sin(camPitch);
     var lookAt=[camPos[0]+sy*cp2, camPos[1]-sp, camPos[2]-cy*cp2];
     var upPt  =[camPos[0],       camPos[1]+1,   camPos[2]];
-    var proj    =createPerspective(70, gl.canvas.width/gl.canvas.height, 0.05, 100);
+    var weapon = getCurrentWeapon();
+    var fov = (weapon.canScope && scopeActive) ? weapon.scopeFov : weapon.fov;
+    var proj    =createPerspective(fov, gl.canvas.width/gl.canvas.height, 0.05, 100);
     var view    =createCamera(camPos, lookAt, upPt);
     var viewProj=math.multiply(proj, view);
 
@@ -631,59 +1176,25 @@ function draw() {
         drawMesh(geoSphere, bM, null, false, [1.0,0.85,0.1], lightPos, camPos, viewProj, 1.0);
     }
 
-    // ---- Arma FPS — fixada em view space (não sofre pitch do world) ----
-    // Estratégia: desenha com a própria viewProj mas com model no espaço da câmera
-    if(objGun) {
-        // Offset fixo no espaço de câmera: direita +0.18, baixo -0.20, frente -0.38
-        // Convertido para world: right = (cy, 0, sy), up = (0,1,0), fwd = (-sy,0,cy) yaw-only
-        var rX2=cy, rZ2=sy;          // right horizontal
-        var fX2=sy, fZ2=-cy;         // forward horizontal (yaw only, SEM pitch)
-        var gx = camPos[0] + fX2*0.38 + rX2*0.18;
-        var gy = camPos[1] - 0.20;
-        var gz = camPos[2] + fZ2*0.38 + rZ2*0.18;
-        var gunM = math.multiply(
-            mat4T(gx, gy, gz),
-            math.multiply(mat4RY(camYaw + Math.PI), mat4S(1.0,1.0,1.0))
+    // Arma FPS — view model da arma selecionada
+    var gunAsset = weaponMeshes[selectedWeaponId];
+    if (gunAsset && gunAsset.buf && gunAsset.tex) {
+        var gunModel = math.multiply(
+            mat4T(weapon.viewPos[0], weapon.viewPos[1], weapon.viewPos[2]),
+            math.multiply(
+                mat4RY(Math.PI),
+                math.multiply(
+                    mat4RX(weapon.viewTilt),
+                    math.multiply(
+                        mat4T(weapon.center[0], weapon.center[1], weapon.center[2]),
+                        mat4S(weapon.viewScale, weapon.viewScale, weapon.viewScale)
+                    )
+                )
+            )
         );
-        drawMesh(objGun, gunM, TEX.gunmap, true, null, lightPos, camPos, viewProj);
-    }
-
-    // ---- Flash de tiro (overlay branco semi-transparente) ----
-    if(shootFlash>0) {
-        shootFlash--;
-        // Reusa o progHUD para desenhar um quad full-screen branco com alpha
-        gl.useProgram(progHUD);
         gl.disable(gl.DEPTH_TEST);
-        gl.bindBuffer(gl.ARRAY_BUFFER,hudBuf);
-        // Quad full-screen temporário
-        var fs=1.0;
-        var flashVerts=new Float32Array([
-            -fs,-fs,0,1, fs,-fs,1,1, fs,fs,1,0,
-            -fs,-fs,0,1, fs,fs,1,0, -fs,fs,0,0
-        ]);
-        var flashBuf=gl.createBuffer();
-        gl.bindBuffer(gl.ARRAY_BUFFER,flashBuf);
-        gl.bufferData(gl.ARRAY_BUFFER,flashVerts,gl.DYNAMIC_DRAW);
-        var ap2=gl.getAttribLocation(progHUD,"aPos"),
-            au2=gl.getAttribLocation(progHUD,"aUV");
-        gl.enableVertexAttribArray(ap2); gl.vertexAttribPointer(ap2,2,gl.FLOAT,false,16,0);
-        gl.enableVertexAttribArray(au2); gl.vertexAttribPointer(au2,2,gl.FLOAT,false,16,8);
-        // Textura sólida branca com alpha proporcional ao flash restante
-        var flashAlpha=shootFlash/6;
-        var flashCanvas=document.createElement('canvas');
-        flashCanvas.width=flashCanvas.height=2;
-        var fctx=flashCanvas.getContext('2d');
-        fctx.fillStyle='rgba(255,220,100,'+flashAlpha+')';
-        fctx.fillRect(0,0,2,2);
-        var flashTex=uploadTexture(flashCanvas);
-        gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D,flashTex);
-        gl.uniform1i(gl.getUniformLocation(progHUD,"uHudTex"),0);
-        gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);
-        gl.drawArrays(gl.TRIANGLES,0,6);
-        gl.disable(gl.BLEND); gl.enable(gl.DEPTH_TEST);
-        gl.deleteTexture(flashTex);
-        gl.deleteBuffer(flashBuf);
+        drawMeshViewSpace(gunAsset.buf, gunModel, gunAsset.tex, true, null, lightPos, view, proj, 1.0, true);
+        gl.enable(gl.DEPTH_TEST);
     }
 
     drawHUD();
@@ -706,7 +1217,8 @@ function initGL() {
 
     gl.useProgram(prog3D);
     gl.enable(gl.DEPTH_TEST);
-    gl.viewport(0,0,canvas.width,canvas.height);
+    resizeCanvas();
+    window.addEventListener('resize', resizeCanvas);
 
     // Geometrias procedurais
     geoSphere  = mkBufs(buildSphere(1.0,20,20));
@@ -734,10 +1246,6 @@ function initGL() {
         'assets/modula scifi megakit/Textures/T_Trim_01_BaseColor.png',
         function(){ return makeChecker('#1a2535','#0d1820',6); });
 
-    loadTexOrFallback('gunmap',
-        'assets/kenney/blaster/Models/OBJ format/Textures/colormap.png',
-        function(){ return makeChecker('#555555','#444444',2); });
-
     // Skins dos personagens
     loadTexOrFallback('skinF',  'assets/kenney/characters/survivors/Skins/survivorFemaleA.png',
         function(){ return makeSolid('#c07858'); });
@@ -748,20 +1256,197 @@ function initGL() {
     loadTexOrFallback('skinZC', 'assets/kenney/characters/survivors/Skins/zombieC.png',
         function(){ return makeSolid('#888880'); });
 
-    // Modelo OBJ da arma (blaster Kenney)
-    fetch('assets/kenney/blaster/Models/OBJ format/blaster-a.obj')
-        .then(function(r){ return r.ok?r.text():null; })
-        .then(function(txt){
-            if(txt){ objGun=mkBufs(parseOBJ(txt));
-                console.log("blaster-a.obj carregado: "+objGun.count+" vértices"); }
-        }).catch(function(){});
+    loadAllWeapons();
 
     initHUD();
 }
 
-// ============================================================
-//  RAYCASTING + TIRO
-// ============================================================
+function loadAllWeapons() {
+    var ids = ['pistol', 'rifle', 'sniper'];
+    var loaded = 0;
+    function onWeaponReady() {
+        loaded++;
+        var el = document.getElementById('loading');
+        if (el) {
+            el.textContent = loaded >= ids.length
+                ? 'Assets prontos — pronto para iniciar'
+                : 'Carregando armas (' + loaded + '/' + ids.length + ')...';
+        }
+    }
+    for (var i = 0; i < ids.length; i++) loadWeaponMesh(ids[i], onWeaponReady);
+}
+
+function loadWeaponMesh(id, onReady) {
+    var def = WEAPON_DEFS[id];
+    weaponMeshes[id] = { buf: null, tex: null, ready: false };
+    var fallbackColor = id === 'pistol' ? '#e8a020' : (id === 'rifle' ? '#6a8aa8' : '#4a6a5a');
+
+    function finishObj(txt) {
+        if (txt) {
+            weaponMeshes[id].buf = mkBufs(flipMeshTexV(parseOBJ(txt)));
+            weaponMeshes[id].ready = true;
+            console.log(def.model + ' carregado:', weaponMeshes[id].buf.count, 'vértices');
+        } else {
+            console.warn(def.model + '.obj não encontrado em', def.objPath);
+        }
+        if (onReady) onReady();
+    }
+
+    var texImg = new Image();
+    texImg.onload = function() {
+        weaponMeshes[id].tex = uploadTexture(texImg);
+        fetch(def.objPath)
+            .then(function(r) { return r.ok ? r.text() : null; })
+            .then(finishObj)
+            .catch(function(e) { console.warn('Erro ao carregar', def.model, e); if (onReady) onReady(); });
+    };
+    texImg.onerror = function() {
+        console.warn('Textura não encontrada:', def.texPath);
+        weaponMeshes[id].tex = uploadTexture(makeSolid(fallbackColor));
+        fetch(def.objPath)
+            .then(function(r) { return r.ok ? r.text() : null; })
+            .then(finishObj)
+            .catch(function() { if (onReady) onReady(); });
+    };
+    texImg.src = def.texPath;
+}
+
+function updateAccuracy() {
+    var accEl = document.getElementById('accuracy');
+    if (shots > 0) {
+        accEl.textContent = Math.round(hits / shots * 100) + '%';
+    } else {
+        accEl.textContent = '—';
+    }
+}
+
+function updateTimerBar() {
+    var bar = document.getElementById('timer-bar');
+    var timerEl = document.getElementById('timer');
+    var pct = sessionDuration > 0 ? (timeLeft / sessionDuration) * 100 : 0;
+    var warnAt = Math.max(3, Math.floor(sessionDuration * 0.15));
+    bar.style.width = pct + '%';
+    bar.style.background = timeLeft <= warnAt ? 'var(--danger)' : 'var(--accent)';
+    timerEl.style.color = timeLeft <= warnAt ? 'var(--danger)' : '';
+}
+
+function resizeCanvas() {
+    var canvas = document.getElementById('glcanvas1');
+    var wrap = document.getElementById('game-wrap');
+    canvas.width = wrap.clientWidth;
+    canvas.height = wrap.clientHeight;
+    if (gl) gl.viewport(0, 0, canvas.width, canvas.height);
+}
+
+function updateMenuSubtitle() {
+    var sub = document.getElementById('menu-subtitle');
+    if (!sub) return;
+    var mode = botsMoving ? 'Alvos em movimento' : 'Alvos parados';
+    sub.textContent = 'Sessão de ' + sessionDuration + ' segundos · ' + mode;
+}
+
+function setupOptionGroup(id, onSelect) {
+    var row = document.getElementById(id);
+    if (!row) return;
+    var btns = row.querySelectorAll('.option-btn');
+    for (var i = 0; i < btns.length; i++) {
+        (function(btn) {
+            btn.addEventListener('click', function() {
+                for (var j = 0; j < btns.length; j++) btns[j].classList.remove('active');
+                btn.classList.add('active');
+                onSelect(btn.getAttribute('data-value'));
+            });
+        })(btns[i]);
+    }
+}
+
+function updateWeaponHint() {
+    var w = getCurrentWeapon();
+    var el = document.getElementById('weapon-hint');
+    if (!el) return;
+    el.innerHTML =
+        '<strong class="weapon-hint-title">' + w.name + '</strong>' +
+        '<span class="weapon-hint-desc">' + w.hint + '</span>';
+}
+
+function initMenuOptions() {
+    setupOptionGroup('opt-duration', function(val) {
+        sessionDuration = parseInt(val, 10);
+        updateMenuSubtitle();
+    });
+    setupOptionGroup('opt-bots', function(val) {
+        botsMoving = (val === 'moving');
+        updateMenuSubtitle();
+    });
+    setupOptionGroup('opt-weapon', function(val) {
+        selectedWeaponId = val;
+        updateWeaponHint();
+    });
+    updateMenuSubtitle();
+    updateWeaponHint();
+}
+
+function bindStartButton() {
+    var btn = document.getElementById('btnStart');
+    if (btn) btn.addEventListener('click', startGame);
+}
+
+function showMainMenu() {
+    document.getElementById('hud').classList.add('hidden');
+    document.getElementById('overlay-content').className = 'overlay-inner';
+    document.getElementById('overlay-content').innerHTML =
+        '<div class="overlay-header">' +
+          '<div class="overlay-tag">Treino de Mira</div>' +
+          '<h1>AIM<span>LAB</span></h1>' +
+          '<p class="overlay-sub" id="menu-subtitle">Sessão de 30 segundos · Alvos em movimento</p>' +
+        '</div>' +
+        '<div class="overlay-body">' +
+          '<div class="option-group">' +
+            '<div class="option-label">Duração da Sessão</div>' +
+            '<div class="option-row" id="opt-duration">' +
+              '<button type="button" class="option-btn' + (sessionDuration===10?' active':'') + '" data-value="10">10s</button>' +
+              '<button type="button" class="option-btn' + (sessionDuration===30?' active':'') + '" data-value="30">30s</button>' +
+              '<button type="button" class="option-btn' + (sessionDuration===45?' active':'') + '" data-value="45">45s</button>' +
+            '</div>' +
+          '</div>' +
+          '<div class="option-group">' +
+            '<div class="option-label">Comportamento dos Alvos</div>' +
+            '<div class="option-row" id="opt-bots">' +
+              '<button type="button" class="option-btn' + (botsMoving?' active':'') + '" data-value="moving">Em Movimento</button>' +
+              '<button type="button" class="option-btn' + (!botsMoving?' active':'') + '" data-value="static">Parados</button>' +
+            '</div>' +
+          '</div>' +
+          '<div class="option-group">' +
+            '<div class="option-label">Arma</div>' +
+            '<div class="option-row" id="opt-weapon">' +
+              '<button type="button" class="option-btn' + (selectedWeaponId==='pistol'?' active':'') + '" data-value="pistol">Pistola</button>' +
+              '<button type="button" class="option-btn' + (selectedWeaponId==='rifle'?' active':'') + '" data-value="rifle">Fuzil</button>' +
+              '<button type="button" class="option-btn' + (selectedWeaponId==='sniper'?' active':'') + '" data-value="sniper">Sniper</button>' +
+            '</div>' +
+            '<p class="weapon-hint" id="weapon-hint">' +
+              '<strong class="weapon-hint-title">' + getCurrentWeapon().name + '</strong>' +
+              '<span class="weapon-hint-desc">' + getCurrentWeapon().hint + '</span>' +
+            '</p>' +
+          '</div>' +
+          '<div class="controls-grid">' +
+            '<div class="ctrl-item"><kbd>W A S D</kbd> Movimentação</div>' +
+            '<div class="ctrl-item"><kbd>MOUSE</kbd> Mirar</div>' +
+            '<div class="ctrl-item"><kbd>CLIQUE</kbd> Atirar</div>' +
+            '<div class="ctrl-item"><kbd>ESC</kbd> Liberar cursor</div>' +
+          '</div>' +
+          '<p class="overlay-desc">' +
+            'Elimine os alvos que aparecem na arena. Alvos mais distantes ' +
+            'concedem maior pontuação. Mantenha a precisão alta.' +
+          '</p>' +
+          '<button type="button" class="btn-primary" id="btnStart">Iniciar Sessão</button>' +
+        '</div>' +
+        '<div class="overlay-footer">' +
+          '<p id="loading">Assets prontos — pronto para iniciar</p>' +
+        '</div>';
+    document.getElementById('overlay').style.display = 'flex';
+    initMenuOptions();
+    bindStartButton();
+}
 function getCamRay() {
     var cy=Math.cos(camYaw),sy=Math.sin(camYaw),
         cp=Math.cos(camPitch),sp=Math.sin(camPitch);
@@ -778,10 +1463,11 @@ function raySphere(o,d,cx,cy,cz,r) {
 }
 function shoot() {
     if(!gameRunning) return;
+    var weapon = getCurrentWeapon();
+    var now = performance.now();
+    if (now - lastShotTime < weapon.fireDelayMs) return;
+    lastShotTime = now;
     shots++;
-
-    // Flash visual de tiro
-    shootFlash = 6;
 
     // Spawna traçador de bala partindo da câmera
     var rd=getCamRay();
@@ -812,6 +1498,7 @@ function shoot() {
         refillTargets();
     }
     document.getElementById('shots').textContent=shots;
+    updateAccuracy();
 }
 
 // ============================================================
@@ -821,12 +1508,34 @@ function initInput() {
     var canvas=document.getElementById("glcanvas1");
     document.addEventListener('keydown',function(e){ keys[e.key.toLowerCase()]=true; });
     document.addEventListener('keyup',  function(e){ keys[e.key.toLowerCase()]=false; });
-    canvas.addEventListener('click', function(){
+    canvas.addEventListener('click', function(e){
+        if (e.button !== 0) return;
         if(!pointerLocked) canvas.requestPointerLock();
         else shoot();
     });
+    canvas.addEventListener('mousedown', function(e) {
+        if (e.button !== 2 || !pointerLocked || !gameRunning) return;
+        if (!getCurrentWeapon().canScope) return;
+        scopeActive = true;
+        setScopeOverlay(true);
+    });
+    canvas.addEventListener('mouseup', function(e) {
+        if (e.button !== 2) return;
+        scopeActive = false;
+        setScopeOverlay(false);
+    });
+    document.addEventListener('mouseup', function(e) {
+        if (e.button !== 2) return;
+        scopeActive = false;
+        setScopeOverlay(false);
+    });
+    canvas.addEventListener('contextmenu', function(e) { e.preventDefault(); });
     document.addEventListener('pointerlockchange',function(){
         pointerLocked=(document.pointerLockElement===canvas);
+        if (!pointerLocked) {
+            scopeActive = false;
+            setScopeOverlay(false);
+        }
     });
     document.addEventListener('mousemove',function(e){
         if(pointerLocked){ mouseDX+=e.movementX; mouseDY+=e.movementY; }
@@ -838,11 +1547,21 @@ function initInput() {
 // ============================================================
 function startGame() {
     document.getElementById('overlay').style.display='none';
-    score=0; shots=0; hits=0; timeLeft=30;
+    document.getElementById('hud').classList.remove('hidden');
+    score=0; shots=0; hits=0; timeLeft=sessionDuration;
+    lastShotTime = 0;
+    scopeActive = false;
+    setScopeOverlay(false);
     targets=[];
     camPos=[0,1.8,14]; camYaw=0; camPitch=0;
     ['score','shots','hits'].forEach(function(id){ document.getElementById(id).textContent=0; });
-    document.getElementById('timer').textContent=30;
+    document.getElementById('timer').textContent=sessionDuration;
+    document.getElementById('timer').style.color='';
+    var corner = document.getElementById('hud-corner');
+    var wpn = getCurrentWeapon();
+    if (corner) corner.textContent = sessionDuration + 'S · ' + wpn.name.toUpperCase();
+    updateAccuracy();
+    updateTimerBar();
     refillTargets();
     gameRunning=true;
     document.getElementById("glcanvas1").requestPointerLock();
@@ -850,6 +1569,7 @@ function startGame() {
     timerInterval=setInterval(function(){
         timeLeft--;
         document.getElementById('timer').textContent=timeLeft;
+        updateTimerBar();
         if(timeLeft<=0){
             clearInterval(timerInterval); gameRunning=false;
             document.exitPointerLock(); showEnd();
@@ -858,15 +1578,48 @@ function startGame() {
     requestAnimationFrame(draw);
 }
 function showEnd() {
-    var acc=shots>0?Math.round(hits/shots*100):0;
-    var ov=document.getElementById('overlay');
-    ov.innerHTML=
-        '<h1 style="color:#ff0">Tempo Esgotado!</h1>'+
-        '<p style="font-size:20px;color:#eee">Pontuação: <b>'+score+'</b></p>'+
-        '<p style="color:#aaa">Tiros: '+shots+'&nbsp;|&nbsp;Acertos: '+hits+'&nbsp;|&nbsp;Precisão: '+acc+'%</p>'+
-        '<button id="btnStart" style="margin-top:16px">Jogar Novamente</button>';
-    ov.style.display='flex';
-    document.getElementById('btnStart').addEventListener('click',startGame);
+    document.getElementById('hud').classList.add('hidden');
+    var acc = shots > 0 ? Math.round(hits / shots * 100) : 0;
+    var ov = document.getElementById('overlay');
+    ov.style.display = 'flex';
+    document.getElementById('overlay-content').className = 'overlay-inner overlay-end';
+    document.getElementById('overlay-content').innerHTML =
+        '<div class="overlay-header">' +
+          '<div class="overlay-tag">Sessão Encerrada</div>' +
+          '<h1>TEMPO ESGOTADO</h1>' +
+          '<p class="overlay-sub">Resultado da sessão de treino</p>' +
+        '</div>' +
+        '<div class="overlay-body">' +
+          '<div class="results-grid">' +
+            '<div class="result-cell highlight">' +
+              '<span class="hud-label">Pontuação</span>' +
+              '<span class="hud-value">' + score + '</span>' +
+            '</div>' +
+            '<div class="result-cell">' +
+              '<span class="hud-label">Acertos</span>' +
+              '<span class="hud-value">' + hits + '</span>' +
+            '</div>' +
+            '<div class="result-cell">' +
+              '<span class="hud-label">Precisão</span>' +
+              '<span class="hud-value">' + acc + '%</span>' +
+            '</div>' +
+          '</div>' +
+          '<div class="results-grid" style="grid-template-columns:1fr 1fr;margin-top:-1px">' +
+            '<div class="result-cell">' +
+              '<span class="hud-label">Tiros Disparados</span>' +
+              '<span class="hud-value">' + shots + '</span>' +
+            '</div>' +
+            '<div class="result-cell">' +
+              '<span class="hud-label">Taxa de Acerto</span>' +
+              '<span class="hud-value">' + hits + '/' + shots + '</span>' +
+            '</div>' +
+          '</div>' +
+          '<button type="button" class="btn-primary" id="btnMenu" style="margin-top:20px">Voltar ao Menu</button>' +
+        '</div>' +
+        '<div class="overlay-footer">' +
+          '<p id="loading">' + sessionDuration + 's · ' + (botsMoving ? 'Alvos móveis' : 'Alvos parados') + '</p>' +
+        '</div>';
+    document.getElementById('btnMenu').addEventListener('click', showMainMenu);
 }
 
 // ============================================================
@@ -875,8 +1628,8 @@ function showEnd() {
 window.onload = function() {
     initGL();
     initInput();
-    document.getElementById('btnStart').addEventListener('click', startGame);
-    document.getElementById('loading').textContent = 'Assets prontos — clique em Jogar!';
+    initMenuOptions();
+    bindStartButton();
 };
 </script>
 </body>
