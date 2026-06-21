@@ -2,7 +2,7 @@
 <html lang="pt-br">
 <head>
 <meta charset="UTF-8">
-<title>AimLab CG</title>
+<title>Shooter Aimlab Simulator</title>
 <script src="math.js"></script>
 <script src="obj-loader.js"></script>
 <script src="geometries.js"></script>
@@ -515,6 +515,17 @@ body {
 .overlay-end .overlay-header h1 { font-size: 28px; }
 .overlay-end .overlay-tag { color: var(--danger); }
 
+#dmg-flash {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: rgba(255,30,30,0);
+  transition: background 0.08s;
+  z-index: 5;
+}
+#dmg-flash.active {
+  background: rgba(255,30,30,0.35);
+}
 #hud.hidden { display: none; }
 </style>
 </head>
@@ -528,6 +539,7 @@ body {
     <div class="scope-cross-h"></div>
     <div class="scope-dot"></div>
   </div>
+  <div id="dmg-flash"></div>
 
   <div id="hud" class="hidden">
     <div id="hud-top">
@@ -547,6 +559,10 @@ body {
         <span class="hud-label">Acertos</span>
         <span class="hud-value" id="hits">0</span>
       </div>
+      <div class="hud-stat">
+        <span class="hud-label">HP</span>
+        <span class="hud-value" id="hp-val">100</span>
+      </div>
       <div id="timer-bar-wrap"><div id="timer-bar"></div></div>
     </div>
     <div id="hud-acc">
@@ -559,8 +575,8 @@ body {
   <div id="overlay">
     <div class="overlay-inner" id="overlay-content">
       <div class="overlay-header">
-        <div class="overlay-tag">Treino de Mira</div>
-        <h1>AIM<span>LAB</span></h1>
+        <div class="overlay-tag">Shooter Aimlab</div>
+        <h1>SIMU<span>LATOR</span></h1>
         <p class="overlay-sub" id="menu-subtitle">Sessão de 30 segundos · Alvos em movimento</p>
       </div>
       <div class="overlay-body">
@@ -614,11 +630,12 @@ body {
 // ============================================================
 //  CONSTANTES DA CENA
 // ============================================================
-var ROOM_HALF   = 20;
-var ROOM_HEIGHT = 10;
-var WALK_BOUND  = 18;
-var MAX_TARGETS = 8;
-var LIGHT_POS    = [0, 7, 0];
+var ROOM_HALF     = 28;
+var ROOM_HEIGHT   = 10;
+var WALK_BOUND    = 26;
+var MAX_TARGETS   = 5;
+var PLAYER_HP_MAX = 100;
+var LIGHT_POS     = [0, 7, 0];
 
 // ============================================================
 //  ARMAS (blaster-k / blaster-r / blaster-f)
@@ -673,6 +690,61 @@ var TEX = {};
 var score=0, shots=0, hits=0, timeLeft=30;
 var sessionDuration=30, botsMoving=true;
 var gameRunning=false, timerInterval=null;
+var lastFrameTime=0;
+var playerHP=100, dmgFlash=0, lowHpSounded=false;
+var enemyBullets=[];
+
+// ============================================================
+//  SISTEMA DE ÁUDIO (Web Audio API)
+// ============================================================
+var audioCtx = null;
+var audioBuffers = {};
+var activeSources = {};
+
+function initAudio() {
+    try {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    } catch(e) { console.warn('Web Audio API não disponível:', e); }
+}
+function loadSound(key, url) {
+    if (!audioCtx) return;
+    fetch(url)
+        .then(function(r){ return r.ok ? r.arrayBuffer() : Promise.reject(url); })
+        .then(function(ab){ return audioCtx.decodeAudioData(ab); })
+        .then(function(buf){ audioBuffers[key]=buf; })
+        .catch(function(){ console.warn('Áudio não carregado:', url); });
+}
+function playSound(key, loop, volume) {
+    if (!audioCtx || !audioBuffers[key]) return;
+    if (audioCtx.state==='suspended') audioCtx.resume();
+    var src=audioCtx.createBufferSource();
+    src.buffer=audioBuffers[key]; src.loop=!!loop;
+    var gain=audioCtx.createGain();
+    gain.gain.value=(volume!=null)?volume:1.0;
+    src.connect(gain); gain.connect(audioCtx.destination);
+    src.start(0);
+    if (loop) activeSources[key]={src:src,gain:gain};
+}
+function stopSound(key) {
+    if (activeSources[key]) {
+        try { activeSources[key].src.stop(); } catch(e) {}
+        delete activeSources[key];
+    }
+}
+function loadAllSounds() {
+    var sounds={
+        shoot_pistol:'assets/pistol_player_shoot.mp3',
+        shoot_rifle: 'assets/sub_player_shoot.mp3',
+        shoot_sniper:'assets/sniper_player_shoot.mp3',
+        enemy_shoot: 'assets/enemy_player_shoot.mp3',
+        enemy_hit:   'assets/enemy_hit.mp3',
+        player_hit:  'assets/player_hit.mp3',
+        low_hp:      'assets/low_hp.mp3',
+        session_end: 'assets/session_end.mp3',
+        ambient:     'assets/ambient_arena.mp3'
+    };
+    for (var k in sounds) loadSound(k,sounds[k]);
+}
 
 // Câmera FPS
 var camPos=[0, 1.8, 14];
@@ -926,7 +998,7 @@ function drawHuman(t, lp, cp, vp) {
 // ============================================================
 function spawnTarget() {
     var angle = Math.random()*Math.PI*2;
-    var dist  = 5 + Math.random()*12;
+    var dist  = 5 + Math.random()*18;
     targets.push({
         x: Math.cos(angle)*dist,
         z: Math.sin(angle)*dist,
@@ -936,7 +1008,8 @@ function spawnTarget() {
         alive:     true,
         scaleAnim: 0,
         turnTimer: 100+Math.floor(Math.random()*200),
-        variantIdx: Math.floor(Math.random()*4)
+        variantIdx: Math.floor(Math.random()*4),
+        shootTimer: 120 + Math.floor(Math.random()*180)
     });
 }
 function refillTargets() {
@@ -973,6 +1046,24 @@ function updateTargets() {
             if(t.turnTimer<=0) {
                 t.faceAngle += (Math.random()-0.5)*1.5;
                 t.turnTimer = 100+Math.floor(Math.random()*200);
+            }
+        }
+
+        // Disparo dos inimigos em direção ao jogador
+        if(gameRunning) {
+            t.shootTimer = (t.shootTimer||180) - 1;
+            if(t.shootTimer<=0) {
+                t.shootTimer = 120 + Math.floor(Math.random()*180);
+                var ex=t.x, ey=1.1, ez=t.z;
+                var sdx=camPos[0]-ex, sdy=camPos[1]-ey, sdz=camPos[2]-ez;
+                var sdist=Math.sqrt(sdx*sdx+sdy*sdy+sdz*sdz);
+                if(sdist>0.5 && sdist<30) {
+                    var spd=0.32;
+                    enemyBullets.push({x:ex,y:ey,z:ez,
+                        dx:sdx/sdist*spd,dy:sdy/sdist*spd,dz:sdz/sdist*spd,
+                        life:90});
+                    playSound('enemy_shoot', false, 0.45);
+                }
             }
         }
     }
@@ -1033,7 +1124,25 @@ var OBSTACLE_BOXES = [
     [  7.4,  8.6,    4.4,   5.6],   // crate  8,5
     [ -8.6,  -7.4,  -5.6,  -4.4],  // crate -8,-5
     [  2.4,  3.6,  -10.6,  -9.4],  // crate  3,-10
-    [ -3.6,  -2.4,   9.4,  10.6]   // crate -3, 10
+    [ -3.6,  -2.4,   9.4,  10.6],  // crate -3, 10
+    // Pilares externos ±18
+    [-18.4,-17.6,-18.4,-17.6],
+    [ 17.6, 18.4,-18.4,-17.6],
+    [ 17.6, 18.4, 17.6, 18.4],
+    [-18.4,-17.6, 17.6, 18.4],
+    // Plataformas externas ±20
+    [-21.75,-18.25,-21.75,-18.25],
+    [ 18.25, 21.75,-21.75,-18.25],
+    [ 18.25, 21.75, 18.25, 21.75],
+    [-21.75,-18.25, 18.25, 21.75],
+    // Muros horizontais adicionais (z=±14)
+    [-4.0, 4.0,-14.2,-13.8],
+    [-4.0, 4.0, 13.8, 14.2],
+    // Caixas externas
+    [ 15.4, 16.6,  7.4,  8.6],
+    [-16.6,-15.4, -8.6, -7.4],
+    [  7.4,  8.6, 15.4, 16.6],
+    [ -8.6, -7.4,-16.6,-15.4]
 ];
 function collidesWithObstacle(x, z, r) {
     for (var i = 0; i < OBSTACLE_BOXES.length; i++) {
@@ -1116,14 +1225,52 @@ function drawMap(lp, cp, vp) {
         drawMesh(geoUnitBox, crateM, TEX.scifi, true, null, lp,cp,vp, 0.22);
     }
 
+    // 4 Pilares externos (±18, ±18)
+    var outerPillarPos=[[-18,0,-18],[18,0,-18],[18,0,18],[-18,0,18]];
+    for(var i=0;i<4;i++) {
+        var pp=outerPillarPos[i];
+        drawMesh(geoUnitBox,
+            math.multiply(mat4T(pp[0],RHH/2,pp[2]), mat4S(0.8,RHH,0.8)),
+            TEX.scifi, true, null, lp,cp,vp, 0.20);
+    }
+
+    // 4 Plataformas externas (±20, ±20)
+    var outerPlatPos=[[-20,0,-20],[20,0,-20],[20,0,20],[-20,0,20]];
+    for(var i=0;i<4;i++) {
+        var pp=outerPlatPos[i];
+        drawMesh(geoUnitBox,
+            math.multiply(mat4T(pp[0],0.3,pp[2]), mat4S(3.5,0.6,3.5)),
+            TEX.scifi, true, null, lp,cp,vp, 0.22);
+    }
+
+    // 2 Muros horizontais adicionais (leste-oeste, z=±14)
+    var muroH=[
+        { t:mat4T(0,1.0,-14), s:mat4S(8.0,2.0,0.4) },
+        { t:mat4T(0,1.0, 14), s:mat4S(8.0,2.0,0.4) }
+    ];
+    for(var i=0;i<2;i++)
+        drawMesh(geoUnitBox, math.multiply(muroH[i].t,muroH[i].s),
+            TEX.scifi, true, null, lp,cp,vp, 0.20);
+
+    // 4 Caixas adicionais nas zonas externas
+    var outerCrates=[[16,0.5,8],[-16,0.5,-8],[8,0.5,16],[-8,0.5,-16]];
+    for(var i=0;i<4;i++) {
+        var cr=outerCrates[i];
+        drawMesh(geoUnitBox,
+            math.multiply(mat4T(cr[0],cr[1],cr[2]),mat4S(1.2,1.0,1.2)),
+            TEX.scifi, true, null, lp,cp,vp, 0.22);
+    }
+
     // (indicador de luz removido — a iluminação já é visível nas superfícies)
 }
 
 // ============================================================
 //  LOOP PRINCIPAL
 // ============================================================
-function draw() {
+function draw(now) {
     if(!gameRunning) return;
+    var dt = lastFrameTime ? Math.min((now - lastFrameTime) / 16.667, 3.0) : 1.0;
+    lastFrameTime = now;
 
     // Câmera FPS
     camYaw   += mouseDX*0.0020;
@@ -1131,14 +1278,22 @@ function draw() {
     camPitch  = Math.max(-Math.PI*0.45, Math.min(Math.PI*0.45, camPitch));
     mouseDX=0; mouseDY=0;
 
-    var speed=0.09, cy=Math.cos(camYaw), sy=Math.sin(camYaw);
-    if(keys['w']||keys['arrowup'])    { camPos[0]+=sy*speed; camPos[2]-=cy*speed; }
-    if(keys['s']||keys['arrowdown'])  { camPos[0]-=sy*speed; camPos[2]+=cy*speed; }
-    if(keys['a']||keys['arrowleft'])  { camPos[0]-=cy*speed; camPos[2]-=sy*speed; }
-    if(keys['d']||keys['arrowright']) { camPos[0]+=cy*speed; camPos[2]+=sy*speed; }
+    var speed=0.07*dt, cy=Math.cos(camYaw), sy=Math.sin(camYaw);
+    var PLAYER_RAD=0.35;
+    var nx=camPos[0], nz=camPos[2];
+    if(keys['w']||keys['arrowup'])    { nx+=sy*speed; nz-=cy*speed; }
+    if(keys['s']||keys['arrowdown'])  { nx-=sy*speed; nz+=cy*speed; }
+    if(keys['a']||keys['arrowleft'])  { nx-=cy*speed; nz-=sy*speed; }
+    if(keys['d']||keys['arrowright']) { nx+=cy*speed; nz+=sy*speed; }
     var B=ROOM_HALF-0.5;
-    camPos[0]=Math.max(-B,Math.min(B,camPos[0]));
-    camPos[2]=Math.max(-B,Math.min(B,camPos[2]));
+    nx=Math.max(-B,Math.min(B,nx));
+    nz=Math.max(-B,Math.min(B,nz));
+    if(!collidesWithObstacle(nx,nz,PLAYER_RAD)){
+        camPos[0]=nx; camPos[2]=nz;
+    } else {
+        if(!collidesWithObstacle(nx,camPos[2],PLAYER_RAD)) camPos[0]=nx;
+        if(!collidesWithObstacle(camPos[0],nz,PLAYER_RAD)) camPos[2]=nz;
+    }
 
     var lightPos = LIGHT_POS;
 
@@ -1174,6 +1329,38 @@ function draw() {
         // Desenha como esfera pequena amarela
         var bM=math.multiply(mat4T(b.x,b.y,b.z), mat4S(0.04,0.04,0.04));
         drawMesh(geoSphere, bM, null, false, [1.0,0.85,0.1], lightPos, camPos, viewProj, 1.0);
+    }
+
+    // ---- Projéteis inimigos ----
+    for(var i=enemyBullets.length-1;i>=0;i--) {
+        var b=enemyBullets[i];
+        b.x+=b.dx; b.y+=b.dy; b.z+=b.dz;
+        b.life--;
+        if(b.life<=0){ enemyBullets.splice(i,1); continue; }
+        var hx=b.x-camPos[0], hy=b.y-camPos[1], hz=b.z-camPos[2];
+        if(hx*hx+hy*hy+hz*hz<0.25){
+            enemyBullets.splice(i,1);
+            playerHP=Math.max(0,playerHP-10);
+            dmgFlash=10;
+            updateHP();
+            playSound('player_hit', false, 0.8);
+            if(playerHP<=30 && !lowHpSounded){ lowHpSounded=true; playSound('low_hp',false,0.9); }
+            if(playerHP<=0&&gameRunning){
+                clearInterval(timerInterval);
+                gameRunning=false;
+                document.exitPointerLock();
+                showEnd();
+                return;
+            }
+            continue;
+        }
+        var bM=math.multiply(mat4T(b.x,b.y,b.z),mat4S(0.06,0.06,0.06));
+        drawMesh(geoSphere,bM,null,false,[1.0,0.15,0.1],lightPos,camPos,viewProj,1.0);
+    }
+    if(dmgFlash>0){
+        dmgFlash--;
+        var dfEl=document.getElementById('dmg-flash');
+        if(dfEl) dfEl.classList.toggle('active',dmgFlash>0);
     }
 
     // Arma FPS — view model da arma selecionada
@@ -1222,8 +1409,8 @@ function initGL() {
 
     // Geometrias procedurais
     geoSphere  = mkBufs(buildSphere(1.0,20,20));
-    geoFloor   = mkBufs(buildQuad(40,8));   // 40 unidades, 8×8 tiles de textura
-    geoCeiling = mkBufs(buildQuad(40,4));
+    geoFloor   = mkBufs(buildQuad(56,10));  // 56 unidades (ROOM_HALF*2), 10×10 tiles de textura
+    geoCeiling = mkBufs(buildQuad(56,5));
     geoUnitBox = mkBufs(buildBox(1,1,1));
 
     // Textura de crosshair (sempre procedural)
@@ -1330,6 +1517,13 @@ function updateTimerBar() {
     timerEl.style.color = timeLeft <= warnAt ? 'var(--danger)' : '';
 }
 
+function updateHP() {
+    var el = document.getElementById('hp-val');
+    if (!el) return;
+    el.textContent = playerHP;
+    el.style.color = playerHP<=30 ? 'var(--danger)' : playerHP<=60 ? 'var(--accent)' : '';
+}
+
 function resizeCanvas() {
     var canvas = document.getElementById('glcanvas1');
     var wrap = document.getElementById('game-wrap');
@@ -1396,8 +1590,8 @@ function showMainMenu() {
     document.getElementById('overlay-content').className = 'overlay-inner';
     document.getElementById('overlay-content').innerHTML =
         '<div class="overlay-header">' +
-          '<div class="overlay-tag">Treino de Mira</div>' +
-          '<h1>AIM<span>LAB</span></h1>' +
+          '<div class="overlay-tag">Shooter Aimlab</div>' +
+          '<h1>Simu<span>lator</span></h1>' +
           '<p class="overlay-sub" id="menu-subtitle">Sessão de 30 segundos · Alvos em movimento</p>' +
         '</div>' +
         '<div class="overlay-body">' +
@@ -1468,6 +1662,8 @@ function shoot() {
     if (now - lastShotTime < weapon.fireDelayMs) return;
     lastShotTime = now;
     shots++;
+    var sndKey = selectedWeaponId==='pistol' ? 'shoot_pistol' : selectedWeaponId==='sniper' ? 'shoot_sniper' : 'shoot_rifle';
+    playSound(sndKey, false, 0.7);
 
     // Spawna traçador de bala partindo da câmera
     var rd=getCamRay();
@@ -1491,6 +1687,7 @@ function shoot() {
     }
     if(hitIdx>=0) {
         targets[hitIdx].alive=false; hits++;
+        playSound('enemy_hit', false, 0.8);
         var pts=Math.round(40+closest*10);
         score+=pts;
         document.getElementById('score').textContent=score;
@@ -1549,11 +1746,11 @@ function startGame() {
     document.getElementById('overlay').style.display='none';
     document.getElementById('hud').classList.remove('hidden');
     score=0; shots=0; hits=0; timeLeft=sessionDuration;
-    lastShotTime = 0;
+    lastShotTime = 0; lastFrameTime = 0;
     scopeActive = false;
     setScopeOverlay(false);
     targets=[];
-    camPos=[0,1.8,14]; camYaw=0; camPitch=0;
+    camPos=[0,1.8,22]; camYaw=0; camPitch=0;
     ['score','shots','hits'].forEach(function(id){ document.getElementById(id).textContent=0; });
     document.getElementById('timer').textContent=sessionDuration;
     document.getElementById('timer').style.color='';
@@ -1562,6 +1759,16 @@ function startGame() {
     if (corner) corner.textContent = sessionDuration + 'S · ' + wpn.name.toUpperCase();
     updateAccuracy();
     updateTimerBar();
+    playerHP = PLAYER_HP_MAX;
+    enemyBullets = [];
+    dmgFlash = 0;
+    var dfEl = document.getElementById('dmg-flash');
+    if (dfEl) dfEl.classList.remove('active');
+    updateHP();
+    lowHpSounded = false;
+    stopSound('ambient');
+    if (audioCtx) audioCtx.resume();
+    playSound('ambient', true, 0.25);
     refillTargets();
     gameRunning=true;
     document.getElementById("glcanvas1").requestPointerLock();
@@ -1578,6 +1785,8 @@ function startGame() {
     requestAnimationFrame(draw);
 }
 function showEnd() {
+    stopSound('ambient');
+    playSound('session_end', false, 0.8);
     document.getElementById('hud').classList.add('hidden');
     var acc = shots > 0 ? Math.round(hits / shots * 100) : 0;
     var ov = document.getElementById('overlay');
@@ -1585,8 +1794,8 @@ function showEnd() {
     document.getElementById('overlay-content').className = 'overlay-inner overlay-end';
     document.getElementById('overlay-content').innerHTML =
         '<div class="overlay-header">' +
-          '<div class="overlay-tag">Sessão Encerrada</div>' +
-          '<h1>TEMPO ESGOTADO</h1>' +
+          '<div class="overlay-tag" style="color:' + (playerHP<=0?'var(--danger)':'var(--accent)') + '">' + (playerHP<=0?'Eliminado':'Sessão Encerrada') + '</div>' +
+          '<h1>' + (playerHP<=0?'GAME OVER':'TEMPO ESGOTADO') + '</h1>' +
           '<p class="overlay-sub">Resultado da sessão de treino</p>' +
         '</div>' +
         '<div class="overlay-body">' +
@@ -1604,7 +1813,7 @@ function showEnd() {
               '<span class="hud-value">' + acc + '%</span>' +
             '</div>' +
           '</div>' +
-          '<div class="results-grid" style="grid-template-columns:1fr 1fr;margin-top:-1px">' +
+          '<div class="results-grid" style="grid-template-columns:1fr 1fr 1fr;margin-top:-1px">' +
             '<div class="result-cell">' +
               '<span class="hud-label">Tiros Disparados</span>' +
               '<span class="hud-value">' + shots + '</span>' +
@@ -1612,6 +1821,10 @@ function showEnd() {
             '<div class="result-cell">' +
               '<span class="hud-label">Taxa de Acerto</span>' +
               '<span class="hud-value">' + hits + '/' + shots + '</span>' +
+            '</div>' +
+            '<div class="result-cell">' +
+              '<span class="hud-label">HP Restante</span>' +
+              '<span class="hud-value" style="color:' + (playerHP<=0?'var(--danger)':playerHP<=30?'var(--accent)':'') + '">' + playerHP + '</span>' +
             '</div>' +
           '</div>' +
           '<button type="button" class="btn-primary" id="btnMenu" style="margin-top:20px">Voltar ao Menu</button>' +
@@ -1626,6 +1839,8 @@ function showEnd() {
 //  ENTRY POINT
 // ============================================================
 window.onload = function() {
+    initAudio();
+    loadAllSounds();
     initGL();
     initInput();
     initMenuOptions();
