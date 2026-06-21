@@ -1,4 +1,4 @@
-# AimLab
+# Shooter Aimlab Simulator
 
 Jogo 3D de treino de mira desenvolvido com **WebGL puro** para a disciplina de Computação Gráfica.
 
