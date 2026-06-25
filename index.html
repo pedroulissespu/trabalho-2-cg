@@ -645,7 +645,7 @@ var WEAPON_DEFS = {
         id: 'pistol', name: 'Pistola', model: 'blaster-k',
         objPath: 'assets/kenney/blaster/blaster-k/blaster-k.obj',
         texPath: 'assets/kenney/blaster/blaster-k/textures/colormap.png',
-        viewPos: [0.17, -0.10, -0.32], viewScale: 0.39, viewTilt: -0.10, center: [0, 0.02, -0.045],
+        viewPos: [0.17, -0.10, -0.24], viewScale: 0.39, viewTilt: 0.08, viewRotY: 0, center: [0, 0.02, -0.045],
         fireDelayMs: 480, fov: 70, scopeFov: 70, canScope: false,
         hint: 'Disparos espaçados. Arma leve e compacta.'
     },
@@ -653,7 +653,7 @@ var WEAPON_DEFS = {
         id: 'rifle', name: 'Fuzil', model: 'blaster-r',
         objPath: 'assets/kenney/blaster/blaster-r/blaster-r.obj',
         texPath: 'assets/kenney/blaster/blaster-r/textures/colormap.png',
-        viewPos: [0.20, -0.22, -0.42], viewScale: 0.72, viewTilt: -0.08, center: [0, 0.08, 0.0],
+        viewPos: [0.20, -0.22, -0.42], viewScale: 0.72, viewTilt: -0.08, viewRotY: Math.PI, center: [0, 0.08, 0.0],
         fireDelayMs: 0, fov: 70, scopeFov: 70, canScope: false,
         hint: 'Alta cadência de tiro. Modo padrão do treino.'
     },
@@ -661,7 +661,7 @@ var WEAPON_DEFS = {
         id: 'sniper', name: 'Sniper', model: 'blaster-f',
         objPath: 'assets/kenney/blaster/blaster-f/blaster-f.obj',
         texPath: 'assets/kenney/blaster/blaster-f/textures/colormap.png',
-        viewPos: [0.20, -0.16, -0.36], viewScale: 0.86, viewTilt: -0.06, center: [0, 0.04, 0.08],
+        viewPos: [0.20, -0.16, -0.36], viewScale: 0.86, viewTilt: -0.06, viewRotY: Math.PI, center: [0, 0.04, 0.08],
         fireDelayMs: 1400, fov: 70, scopeFov: 26, canScope: true,
         hint: 'Disparos lentos e precisos. Segure o botão direito para mirar.'
     }
@@ -683,8 +683,7 @@ var hudBuf;
 
 // Texturas carregadas
 var TEX = {};
-/*  Chaves: floor, wall, ceiling, scifi,
-            skinF, skinM, skinZA, skinZC, crosshair  */
+/*  Chaves: floor, wall, ceiling, scifi, crosshair  */
 
 // Modelos OBJ das armas (ver weaponMeshes)
 var score=0, shots=0, hits=0, timeLeft=30;
@@ -757,18 +756,15 @@ var targets=[];
 // Traçadores de tiro
 var bullets   = [];       // {x,y,z, dx,dy,dz, life}
 
-// ============================================================
-//  VARIANTES DE PERSONAGEM
-//  head   → cor sólida da cabeça (tom de pele)
-//  shirt  → cor sólida do tronco/braços
-//  pants  → cor sólida das pernas
-// ============================================================
-var CHAR_VARIANTS = [
-    { head:[0.85,0.65,0.50], shirt:[0.25, 0.40, 0.72], pants:[0.12, 0.10, 0.09] },  // Survivor Female (azul)
-    { head:[0.78,0.55,0.40], shirt:[0.30, 0.50, 0.22], pants:[0.18, 0.14, 0.09] },  // Survivor Male   (verde militar)
-    { head:[0.55,0.58,0.38], shirt:[0.22, 0.20, 0.17], pants:[0.15, 0.12, 0.10] },  // Zombie A        (esverdeado)
-    { head:[0.60,0.58,0.55], shirt:[0.18, 0.18, 0.20], pants:[0.10, 0.10, 0.12] }   // Zombie C        (acinzentado)
-];
+// NPC inimigo — character-d (Kenney blocky characters)
+var NPC_OBJ_PATH = 'assets/kenney/npcs/Models/OBJ format/character-d.obj';
+var NPC_TEX_PATH = 'assets/kenney/npcs/Models/OBJ format/Textures/texture-d.png';
+var NPC_SCALE         = 0.78;
+var NPC_MODEL_HEIGHT  = 2.7;
+var NPC_HALF_WIDTH    = 0.4;
+var NPC_HALF_DEPTH    = 0.4;
+var NPC_ROT_Y         = 0;
+var npcCharacter = null;  // { buf, tex }
 
 // ============================================================
 //  HELPERS WEBGL  (padrão do professor)
@@ -936,61 +932,20 @@ function drawMeshViewSpace(buf, model, tex, useTex, solidColor, worldLightPos, v
 }
 
 // ============================================================
-//  FIGURA HUMANA  (6 peças, animação de caminhada)
-//  Cada alvo tem um variantIdx → CHAR_VARIANTS
+//  NPC INIMIGO  (character-d OBJ)
 // ============================================================
 function drawHuman(t, lp, cp, vp) {
-    var v  = CHAR_VARIANTS[t.variantIdx];
-    var wc = t.walkCycle;
+    if (!npcCharacter || !npcCharacter.buf || !npcCharacter.tex) return;
     var s  = t.scaleAnim;
-    var legSwing =  Math.sin(wc)*0.52;
-    var armSwing = -Math.sin(wc)*0.38;
-
-    var base = math.multiply(
-        mat4T(t.x, 0, t.z),
-        math.multiply(mat4RY(t.faceAngle), mat4S(s,s,s))
+    var bobY = botsMoving ? Math.sin(t.walkCycle * 2.0) * 0.04 : 0;
+    var model = math.multiply(
+        mat4T(t.x, bobY, t.z),
+        math.multiply(
+            mat4RY(t.faceAngle + NPC_ROT_Y),
+            mat4S(s * NPC_SCALE, s * NPC_SCALE, s * NPC_SCALE)
+        )
     );
-
-    // Cabeça — cor sólida de pele (as skin PNGs do Kenney são sheets completos,
-    //          não mapeiam bem em esfera; cor sólida fica mais limpa)
-    var headM = math.multiply(base,
-        math.multiply(mat4T(0,1.42,0), mat4S(0.22,0.22,0.22)));
-    drawMesh(geoSphere, headM, null, false, v.head, lp,cp,vp, 0.30);
-
-    // Tronco
-    var torsoM = math.multiply(base,
-        math.multiply(mat4T(0,0.82,0), mat4S(0.38,0.56,0.20)));
-    drawMesh(geoUnitBox, torsoM, null, false, v.shirt, lp,cp,vp);
-
-    // Braço esquerdo
-    var armH=0.44;
-    var lArmM = math.multiply(base,
-        math.multiply(mat4T(-0.25,1.05,0),
-        math.multiply(mat4RX(armSwing),
-        math.multiply(mat4T(0,-armH/2,0), mat4S(0.11,armH,0.11)))));
-    drawMesh(geoUnitBox, lArmM, null, false, v.shirt, lp,cp,vp);
-
-    // Braço direito
-    var rArmM = math.multiply(base,
-        math.multiply(mat4T(0.25,1.05,0),
-        math.multiply(mat4RX(-armSwing),
-        math.multiply(mat4T(0,-armH/2,0), mat4S(0.11,armH,0.11)))));
-    drawMesh(geoUnitBox, rArmM, null, false, v.shirt, lp,cp,vp);
-
-    // Perna esquerda
-    var legH=0.56;
-    var lLegM = math.multiply(base,
-        math.multiply(mat4T(-0.09,0.56,0),
-        math.multiply(mat4RX(legSwing),
-        math.multiply(mat4T(0,-legH/2,0), mat4S(0.14,legH,0.14)))));
-    drawMesh(geoUnitBox, lLegM, null, false, v.pants, lp,cp,vp);
-
-    // Perna direita
-    var rLegM = math.multiply(base,
-        math.multiply(mat4T(0.09,0.56,0),
-        math.multiply(mat4RX(-legSwing),
-        math.multiply(mat4T(0,-legH/2,0), mat4S(0.14,legH,0.14)))));
-    drawMesh(geoUnitBox, rLegM, null, false, v.pants, lp,cp,vp);
+    drawMesh(npcCharacter.buf, model, npcCharacter.tex, true, null, lp, cp, vp, 0.28);
 }
 
 // ============================================================
@@ -1008,7 +963,6 @@ function spawnTarget() {
         alive:     true,
         scaleAnim: 0,
         turnTimer: 100+Math.floor(Math.random()*200),
-        variantIdx: Math.floor(Math.random()*4),
         shootTimer: 120 + Math.floor(Math.random()*180)
     });
 }
@@ -1054,7 +1008,7 @@ function updateTargets() {
             t.shootTimer = (t.shootTimer||180) - 1;
             if(t.shootTimer<=0) {
                 t.shootTimer = 120 + Math.floor(Math.random()*180);
-                var ex=t.x, ey=1.1, ez=t.z;
+                var ex=t.x, ey=NPC_MODEL_HEIGHT * t.scaleAnim * NPC_SCALE * 0.55, ez=t.z;
                 var sdx=camPos[0]-ex, sdy=camPos[1]-ey, sdz=camPos[2]-ez;
                 var sdist=Math.sqrt(sdx*sdx+sdy*sdy+sdz*sdz);
                 if(sdist>0.5 && sdist<30) {
@@ -1369,7 +1323,7 @@ function draw(now) {
         var gunModel = math.multiply(
             mat4T(weapon.viewPos[0], weapon.viewPos[1], weapon.viewPos[2]),
             math.multiply(
-                mat4RY(Math.PI),
+                mat4RY(weapon.viewRotY),
                 math.multiply(
                     mat4RX(weapon.viewTilt),
                     math.multiply(
@@ -1379,9 +1333,8 @@ function draw(now) {
                 )
             )
         );
-        gl.disable(gl.DEPTH_TEST);
+        gl.clear(gl.DEPTH_BUFFER_BIT);
         drawMeshViewSpace(gunAsset.buf, gunModel, gunAsset.tex, true, null, lightPos, view, proj, 1.0, true);
-        gl.enable(gl.DEPTH_TEST);
     }
 
     drawHUD();
@@ -1433,19 +1386,42 @@ function initGL() {
         'assets/modula scifi megakit/Textures/T_Trim_01_BaseColor.png',
         function(){ return makeChecker('#1a2535','#0d1820',6); });
 
-    // Skins dos personagens
-    loadTexOrFallback('skinF',  'assets/kenney/characters/survivors/Skins/survivorFemaleA.png',
-        function(){ return makeSolid('#c07858'); });
-    loadTexOrFallback('skinM',  'assets/kenney/characters/survivors/Skins/survivorMaleB.png',
-        function(){ return makeSolid('#b86e48'); });
-    loadTexOrFallback('skinZA', 'assets/kenney/characters/survivors/Skins/zombieA.png',
-        function(){ return makeSolid('#8ea060'); });
-    loadTexOrFallback('skinZC', 'assets/kenney/characters/survivors/Skins/zombieC.png',
-        function(){ return makeSolid('#888880'); });
-
+    loadNpcCharacter();
     loadAllWeapons();
 
     initHUD();
+}
+
+function loadNpcCharacter() {
+    var texImg = new Image();
+    texImg.onload = function() {
+        var tex = uploadTexture(texImg);
+        fetch(NPC_OBJ_PATH)
+            .then(function(r) { return r.ok ? r.text() : null; })
+            .then(function(txt) {
+                if (!txt) {
+                    console.warn('character-d.obj não encontrado em', NPC_OBJ_PATH);
+                    return;
+                }
+                npcCharacter = { buf: mkBufs(flipMeshTexV(parseOBJ(txt))), tex: tex };
+                console.log('character-d carregado:', npcCharacter.buf.count, 'vértices');
+            })
+            .catch(function(e) { console.warn('Erro ao carregar character-d', e); });
+    };
+    texImg.onerror = function() {
+        console.warn('texture-d.png não encontrada em', NPC_TEX_PATH);
+        fetch(NPC_OBJ_PATH)
+            .then(function(r) { return r.ok ? r.text() : null; })
+            .then(function(txt) {
+                if (txt) {
+                    npcCharacter = {
+                        buf: mkBufs(flipMeshTexV(parseOBJ(txt))),
+                        tex: uploadTexture(makeSolid('#6a8a6a'))
+                    };
+                }
+            });
+    };
+    texImg.src = NPC_TEX_PATH;
 }
 
 function loadAllWeapons() {
@@ -1655,6 +1631,33 @@ function raySphere(o,d,cx,cy,cz,r) {
     if(disc<0) return false;
     return (-b-Math.sqrt(disc))/(2*a)>0.05;
 }
+function rayAabb(o, d, bmin, bmax) {
+    var tmin = -Infinity, tmax = Infinity;
+    for (var i = 0; i < 3; i++) {
+        if (Math.abs(d[i]) < 1e-8) {
+            if (o[i] < bmin[i] || o[i] > bmax[i]) return false;
+            continue;
+        }
+        var inv = 1 / d[i];
+        var t1 = (bmin[i] - o[i]) * inv;
+        var t2 = (bmax[i] - o[i]) * inv;
+        var tn = Math.min(t1, t2), tf = Math.max(t1, t2);
+        tmin = Math.max(tmin, tn);
+        tmax = Math.min(tmax, tf);
+        if (tmin > tmax) return false;
+    }
+    return tmax > 0.05;
+}
+function rayHitsNpc(o, d, t) {
+    var s  = t.scaleAnim * NPC_SCALE;
+    var hw = NPC_HALF_WIDTH * s;
+    var hd = NPC_HALF_DEPTH * s;
+    var h  = NPC_MODEL_HEIGHT * s;
+    return rayAabb(o, d,
+        [t.x - hw, 0, t.z - hd],
+        [t.x + hw, h, t.z + hd]
+    );
+}
 function shoot() {
     if(!gameRunning) return;
     var weapon = getCurrentWeapon();
@@ -1679,7 +1682,7 @@ function shoot() {
     var closest=Infinity, hitIdx=-1;
     for(var i=0;i<targets.length;i++) {
         var t=targets[i]; if(!t.alive) continue;
-        if(raySphere(camPos,rd, t.x,0.9,t.z, 0.62)) {
+        if(rayHitsNpc(camPos, rd, t)) {
             var dx=t.x-camPos[0],dz=t.z-camPos[2];
             var dist=Math.sqrt(dx*dx+dz*dz);
             if(dist<closest){ closest=dist; hitIdx=i; }
