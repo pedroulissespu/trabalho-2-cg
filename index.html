@@ -899,7 +899,7 @@ function setProg3DUniforms(mvp, model, lp, cp, ambient, useTex, tex, solidColor,
     gl.uniform3fv(gl.getUniformLocation(prog3D,"uLightPos"),  lp);
     gl.uniform3fv(gl.getUniformLocation(prog3D,"uCamPos"),    cp);
     gl.uniform3fv(gl.getUniformLocation(prog3D,"uLightColor"),[1.0,0.95,0.85]);
-    gl.uniform1f (gl.getUniformLocation(prog3D,"uAmbient"),   ambient!=null?ambient:0.20);
+    gl.uniform1f (gl.getUniformLocation(prog3D,"uAmbient"),   ambient!=null?ambient:0.09);
     gl.uniform1f (gl.getUniformLocation(prog3D,"uUnlit"),     unlit?1.0:0.0);
     gl.uniform1i (gl.getUniformLocation(prog3D,"uUseTex"),    useTex?1:0);
     if (useTex) {
@@ -958,7 +958,7 @@ function drawHuman(t, lp, cp, vp) {
     //          não mapeiam bem em esfera; cor sólida fica mais limpa)
     var headM = math.multiply(base,
         math.multiply(mat4T(0,1.42,0), mat4S(0.22,0.22,0.22)));
-    drawMesh(geoSphere, headM, null, false, v.head, lp,cp,vp, 0.30);
+    drawMesh(geoSphere, headM, null, false, v.head, lp,cp,vp, 0.13);
 
     // Tronco
     var torsoM = math.multiply(base,
@@ -1164,11 +1164,11 @@ function drawMap(lp, cp, vp) {
 
     // Chão com textura de madeira (tiling 8×8)
     drawMesh(geoFloor, math.multiply(mat4T(0,0,0), mat4S(1,1,1)),
-             TEX.floor, true, null, lp,cp,vp, 0.25);
+             TEX.floor, true, null, lp,cp,vp, 0.11);
 
     // Teto com textura de aço (cor mais escura)
     var ceilM=math.multiply(mat4T(0,RHH,0), mat4S(1,-1,1));
-    drawMesh(geoCeiling, ceilM, TEX.ceiling, true, null, lp,cp,vp, 0.15);
+    drawMesh(geoCeiling, ceilM, TEX.ceiling, true, null, lp,cp,vp, 0.07);
 
     // 4 Paredes principais — textura exterior wall
     var wallDefs=[
@@ -1180,7 +1180,7 @@ function drawMap(lp, cp, vp) {
     for(var w=0;w<4;w++) {
         drawMesh(geoUnitBox,
             math.multiply(wallDefs[w].t, wallDefs[w].s),
-            TEX.wall, true, null, lp,cp,vp, 0.22);
+            TEX.wall, true, null, lp,cp,vp, 0.10);
     }
 
     // ---- PROPS INTERNOS (textura scifi) ----
@@ -1193,7 +1193,7 @@ function drawMap(lp, cp, vp) {
             mat4T(pp[0], RHH/2, pp[2]),
             mat4S(0.8, RHH, 0.8)
         );
-        drawMesh(geoUnitBox, pillarM, TEX.scifi, true, null, lp,cp,vp, 0.20);
+        drawMesh(geoUnitBox, pillarM, TEX.scifi, true, null, lp,cp,vp, 0.09);
     }
 
     // 4 Plataformas elevadas (y=0..0.6) perto dos pilares
@@ -1204,7 +1204,7 @@ function drawMap(lp, cp, vp) {
             mat4T(pp[0], 0.3, pp[2]),
             mat4S(3.5, 0.6, 3.5)
         );
-        drawMesh(geoUnitBox, platM, TEX.scifi, true, null, lp,cp,vp, 0.22);
+        drawMesh(geoUnitBox, platM, TEX.scifi, true, null, lp,cp,vp, 0.10);
     }
 
     // 2 Muros centrais longos (cobertura central)
