@@ -635,7 +635,9 @@ var ROOM_HEIGHT   = 10;
 var WALK_BOUND    = 26;
 var MAX_TARGETS   = 5;
 var PLAYER_HP_MAX = 100;
-var LIGHT_POS     = [0, 7, 0];
+var LIGHT_ORBIT_R = 10;   // raio da órbita da luz
+var LIGHT_HEIGHT  = 7.5;
+var lightAngle    = 0;    // ângulo atual da luz (rad)
 
 // ============================================================
 //  ARMAS (blaster-k / blaster-r / blaster-f)
@@ -746,8 +748,9 @@ function loadAllSounds() {
 }
 
 // Câmera FPS
-var camPos=[0, 1.8, 14];
+var camPos=[0, 1.8, 22];
 var camYaw=0, camPitch=0;
+var camVelY=0, camOnGround=true;
 var keys={}, mouseDX=0, mouseDY=0, pointerLocked=false;
 
 // Alvos
@@ -892,7 +895,7 @@ function setProg3DUniforms(mvp, model, lp, cp, ambient, useTex, tex, solidColor,
     gl.uniform3fv(gl.getUniformLocation(prog3D,"uLightPos"),  lp);
     gl.uniform3fv(gl.getUniformLocation(prog3D,"uCamPos"),    cp);
     gl.uniform3fv(gl.getUniformLocation(prog3D,"uLightColor"),[1.0,0.95,0.85]);
-    gl.uniform1f (gl.getUniformLocation(prog3D,"uAmbient"),   ambient!=null?ambient:0.20);
+    gl.uniform1f (gl.getUniformLocation(prog3D,"uAmbient"),   ambient!=null?ambient:0.09);
     gl.uniform1f (gl.getUniformLocation(prog3D,"uUnlit"),     unlit?1.0:0.0);
     gl.uniform1i (gl.getUniformLocation(prog3D,"uUseTex"),    useTex?1:0);
     if (useTex) {
@@ -1115,11 +1118,11 @@ function drawMap(lp, cp, vp) {
 
     // Chão com textura de madeira (tiling 8×8)
     drawMesh(geoFloor, math.multiply(mat4T(0,0,0), mat4S(1,1,1)),
-             TEX.floor, true, null, lp,cp,vp, 0.25);
+             TEX.floor, true, null, lp,cp,vp, 0.11);
 
     // Teto com textura de aço (cor mais escura)
     var ceilM=math.multiply(mat4T(0,RHH,0), mat4S(1,-1,1));
-    drawMesh(geoCeiling, ceilM, TEX.ceiling, true, null, lp,cp,vp, 0.15);
+    drawMesh(geoCeiling, ceilM, TEX.ceiling, true, null, lp,cp,vp, 0.07);
 
     // 4 Paredes principais — textura exterior wall
     var wallDefs=[
@@ -1131,7 +1134,7 @@ function drawMap(lp, cp, vp) {
     for(var w=0;w<4;w++) {
         drawMesh(geoUnitBox,
             math.multiply(wallDefs[w].t, wallDefs[w].s),
-            TEX.wall, true, null, lp,cp,vp, 0.22);
+            TEX.wall, true, null, lp,cp,vp, 0.10);
     }
 
     // ---- PROPS INTERNOS (textura scifi) ----
@@ -1144,7 +1147,7 @@ function drawMap(lp, cp, vp) {
             mat4T(pp[0], RHH/2, pp[2]),
             mat4S(0.8, RHH, 0.8)
         );
-        drawMesh(geoUnitBox, pillarM, TEX.scifi, true, null, lp,cp,vp, 0.20);
+        drawMesh(geoUnitBox, pillarM, TEX.scifi, true, null, lp,cp,vp, 0.09);
     }
 
     // 4 Plataformas elevadas (y=0..0.6) perto dos pilares
@@ -1155,7 +1158,7 @@ function drawMap(lp, cp, vp) {
             mat4T(pp[0], 0.3, pp[2]),
             mat4S(3.5, 0.6, 3.5)
         );
-        drawMesh(geoUnitBox, platM, TEX.scifi, true, null, lp,cp,vp, 0.22);
+        drawMesh(geoUnitBox, platM, TEX.scifi, true, null, lp,cp,vp, 0.10);
     }
 
     // 2 Muros centrais longos (cobertura central)
@@ -1249,7 +1252,22 @@ function draw(now) {
         if(!collidesWithObstacle(camPos[0],nz,PLAYER_RAD)) camPos[2]=nz;
     }
 
-    var lightPos = LIGHT_POS;
+    // Pulo + gravidade
+    var GRAVITY = 0.022, FLOOR_Y = 1.8;
+    camVelY -= GRAVITY * dt;
+    camPos[1] += camVelY * dt;
+    if (camPos[1] <= FLOOR_Y) {
+        camPos[1] = FLOOR_Y; camVelY = 0; camOnGround = true;
+    } else { camOnGround = false; }
+    if (camPos[1] > ROOM_HEIGHT - 0.5) { camPos[1] = ROOM_HEIGHT - 0.5; camVelY = 0; }
+
+    var lightAngleSpeed = 0.008; // rad por frame a 60 Hz
+    lightAngle += lightAngleSpeed * dt;
+    var lightPos = [
+        Math.cos(lightAngle) * LIGHT_ORBIT_R,
+        LIGHT_HEIGHT,
+        Math.sin(lightAngle) * LIGHT_ORBIT_R
+    ];
 
     updateTargets();
 
@@ -1277,9 +1295,10 @@ function draw(now) {
     // ---- Traçadores de bala ----
     for(var i=bullets.length-1;i>=0;i--) {
         var b=bullets[i];
-        b.x+=b.dx; b.y+=b.dy; b.z+=b.dz;
-        b.life--;
-        if(b.life<=0){ bullets.splice(i,1); continue; }
+        b.x+=b.dx*dt; b.y+=b.dy*dt; b.z+=b.dz*dt;
+        b.life-=dt;
+        var bOob = Math.abs(b.x)>ROOM_HALF||Math.abs(b.z)>ROOM_HALF||b.y<0||b.y>ROOM_HEIGHT;
+        if(b.life<=0||bOob||collidesWithObstacle(b.x,b.z,0.08)){ bullets.splice(i,1); continue; }
         // Desenha como esfera pequena amarela
         var bM=math.multiply(mat4T(b.x,b.y,b.z), mat4S(0.04,0.04,0.04));
         drawMesh(geoSphere, bM, null, false, [1.0,0.85,0.1], lightPos, camPos, viewProj, 1.0);
@@ -1288,9 +1307,10 @@ function draw(now) {
     // ---- Projéteis inimigos ----
     for(var i=enemyBullets.length-1;i>=0;i--) {
         var b=enemyBullets[i];
-        b.x+=b.dx; b.y+=b.dy; b.z+=b.dz;
-        b.life--;
-        if(b.life<=0){ enemyBullets.splice(i,1); continue; }
+        b.x+=b.dx*dt; b.y+=b.dy*dt; b.z+=b.dz*dt;
+        b.life-=dt;
+        var bOob = Math.abs(b.x)>ROOM_HALF||Math.abs(b.z)>ROOM_HALF||b.y<0||b.y>ROOM_HEIGHT;
+        if(b.life<=0||bOob||collidesWithObstacle(b.x,b.z,0.08)){ enemyBullets.splice(i,1); continue; }
         var hx=b.x-camPos[0], hy=b.y-camPos[1], hz=b.z-camPos[2];
         if(hx*hx+hy*hy+hz*hz<0.25){
             enemyBullets.splice(i,1);
@@ -1706,7 +1726,10 @@ function shoot() {
 // ============================================================
 function initInput() {
     var canvas=document.getElementById("glcanvas1");
-    document.addEventListener('keydown',function(e){ keys[e.key.toLowerCase()]=true; });
+    document.addEventListener('keydown',function(e){
+        keys[e.key.toLowerCase()]=true;
+        if(e.key===' ' && camOnGround && gameRunning){ camVelY=0.20; camOnGround=false; }
+    });
     document.addEventListener('keyup',  function(e){ keys[e.key.toLowerCase()]=false; });
     canvas.addEventListener('click', function(e){
         if (e.button !== 0) return;
@@ -1751,10 +1774,10 @@ function startGame() {
     score=0; shots=0; hits=0; timeLeft=sessionDuration;
     lastShotTime = 0; lastFrameTime = 0;
     scopeActive = false;
+    camVelY = 0; camOnGround = true;
     setScopeOverlay(false);
     targets=[];
     camPos=[0,1.8,22]; camYaw=0; camPitch=0;
-    ['score','shots','hits'].forEach(function(id){ document.getElementById(id).textContent=0; });
     document.getElementById('timer').textContent=sessionDuration;
     document.getElementById('timer').style.color='';
     var corner = document.getElementById('hud-corner');

@@ -89,5 +89,5 @@ Clique com botão direito em `index.html` → **Open with Live Server**.
 
 ## Links
 
-- **Vídeo demonstração:** Gravar Depois
-- **Slides:** Criar Depois
+- [**Vídeo demonstração**](https://youtu.be/Pdo06Z1VZWk)
+- [**Slides**](https://canva.link/4k0d306iesw4zrv)
